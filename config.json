@@ -51,6 +51,54 @@
 				"description": "Постоянный входной расход",
 				"unit": "м³/ч",
 				"initial_value": 100.0
+			},
+			"primary_controller_status": {
+				"node_id": "ns=2;i=9",
+				"description": "Статус основного контроллера",
+				"unit": "bool",
+				"initial_value": false
+			},
+			"backup_controller_status": {
+				"node_id": "ns=2;i=10",
+				"description": "Статус резервного контроллера",
+				"unit": "bool",
+				"initial_value": false
+			},
+			"active_controller": {
+				"node_id": "ns=2;i=11",
+				"description": "Активный контроллер (1=основной, 2=резервный)",
+				"unit": "int",
+				"initial_value": 1
+			},
+			"primary_controller_heartbeat": {
+				"node_id": "ns=2;i=12",
+				"description": "Heartbeat основного контроллера",
+				"unit": "timestamp",
+				"initial_value": 0
+			},
+			"backup_controller_heartbeat": {
+				"node_id": "ns=2;i=13",
+				"description": "Heartbeat резервного контроллера",
+				"unit": "timestamp",
+				"initial_value": 0
+			},
+			"pid_integral": {
+				"node_id": "ns=2;i=14",
+				"description": "Интегральная составляющая ПИД",
+				"unit": "float",
+				"initial_value": 0.0
+			},
+			"pid_previous_error": {
+				"node_id": "ns=2;i=15",
+				"description": "Предыдущая ошибка ПИД",
+				"unit": "float",
+				"initial_value": 0.0
+			},
+			"pid_previous_derivative": {
+				"node_id": "ns=2;i=16",
+				"description": "Предыдущая производная ПИД",
+				"unit": "float",
+				"initial_value": 0.0
 			}
 		}
 	},
@@ -58,6 +106,9 @@
 		"opcua_server_port": 4840,
 		"model_update_interval": 0.1,
 		"controller_update_interval": 0.1,
-		"logging_level": "INFO"
+		"logging_level": "INFO",
+		"controller_heartbeat_timeout": 5.0,
+		"controller_failover_delay": 2.0,
+		"watchdog_update_interval": 5.0
 	}
 }

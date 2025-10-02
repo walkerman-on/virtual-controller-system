@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   opcua-server:
     build: ./opcua-server
@@ -25,9 +23,9 @@ services:
     environment:
       - OPCUA_SERVER_URL=opc.tcp://opcua-server:4840/freeopcua/server/
 
-  controller:
+  controller-primary:
     build: ./controller
-    container_name: pid-controller
+    container_name: pid-controller-primary
     depends_on:
       - opcua-server
     volumes:
@@ -37,6 +35,52 @@ services:
     restart: unless-stopped
     environment:
       - OPCUA_SERVER_URL=opc.tcp://opcua-server:4840/freeopcua/server/
+      - CONTROLLER_MODE=primary
+    command: [ "python", "universal_controller.py" ]
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import socket; s = socket.socket(); s.connect(('opcua-server', 4840)); s.close()" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  controller-backup:
+    build: ./controller
+    container_name: pid-controller-backup
+    depends_on:
+      - opcua-server
+      - controller-primary
+    volumes:
+      - ./config.json:/app/config.json
+    networks:
+      - process-network
+    restart: unless-stopped
+    environment:
+      - OPCUA_SERVER_URL=opc.tcp://opcua-server:4840/freeopcua/server/
+      - CONTROLLER_MODE=backup
+    command: [ "python", "universal_controller.py" ]
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import socket; s = socket.socket(); s.connect(('opcua-server', 4840)); s.close()" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+  watchdog:
+    build: ./watchdog
+    container_name: controller-watchdog
+    depends_on:
+      - opcua-server
+      - controller-primary
+      - controller-backup
+    volumes:
+      - ./config.json:/app/config.json
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - process-network
+    restart: unless-stopped
+    environment:
+      - OPCUA_SERVER_URL=opc.tcp://opcua-server:4840/freeopcua/server/
+    privileged: true
 
 networks:
   process-network:
