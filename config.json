@@ -1,0 +1,63 @@
+{
+	"model_parameters": {
+		"tank_height": 3.0,
+		"tank_diameter": 2.0,
+		"liquid_density": 1000.0,
+		"constant_inlet_flow": 100.0,
+		"initial_liquid_level": 1.5,
+		"initial_valve_opening": 50.0,
+		"gravity": 9.81,
+		"simulation_time_step": 0.1,
+		"tank_cross_section_area": 3.141592653589793
+	},
+	"pid_controller": {
+		"kp": 15.0,
+		"ki": 0.1,
+		"kd": 1.0,
+		"setpoint": 1.6,
+		"output_min": 0.0,
+		"output_max": 100.0,
+		"integral_limit": 5.0,
+		"derivative_filter_time": 0.1
+	},
+	"opcua_variables": {
+		"process_variables": {
+			"PV_level": {
+				"node_id": "ns=2;i=4",
+				"description": "Текущий уровень жидкости в баке",
+				"unit": "м",
+				"initial_value": 1.5
+			},
+			"SP_level": {
+				"node_id": "ns=2;i=5",
+				"description": "Уставка уровня жидкости",
+				"unit": "м",
+				"initial_value": 1.3
+			},
+			"OP_valve": {
+				"node_id": "ns=2;i=6",
+				"description": "Управляющее воздействие на клапан",
+				"unit": "%",
+				"initial_value": 50.0
+			},
+			"outlet_flow": {
+				"node_id": "ns=2;i=7",
+				"description": "Расход через выходной клапан",
+				"unit": "м³/ч",
+				"initial_value": 50.0
+			},
+			"inlet_flow": {
+				"node_id": "ns=2;i=8",
+				"description": "Постоянный входной расход",
+				"unit": "м³/ч",
+				"initial_value": 100.0
+			}
+		}
+	},
+	"system_settings": {
+		"opcua_server_port": 4840,
+		"model_update_interval": 0.1,
+		"controller_update_interval": 0.1,
+		"logging_level": "INFO"
+	}
+}

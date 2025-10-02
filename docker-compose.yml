@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  opcua-server:
+    build: ./opcua-server
+    container_name: opcua-server
+    ports:
+      - "4840:4840"
+    volumes:
+      - ./config.json:/app/config.json
+    networks:
+      - process-network
+    restart: unless-stopped
+
+  model:
+    build: ./model
+    container_name: process-model
+    depends_on:
+      - opcua-server
+    volumes:
+      - ./config.json:/app/config.json
+    networks:
+      - process-network
+    restart: unless-stopped
+    environment:
+      - OPCUA_SERVER_URL=opc.tcp://opcua-server:4840/freeopcua/server/
+
+  controller:
+    build: ./controller
+    container_name: pid-controller
+    depends_on:
+      - opcua-server
+    volumes:
+      - ./config.json:/app/config.json
+    networks:
+      - process-network
+    restart: unless-stopped
+    environment:
+      - OPCUA_SERVER_URL=opc.tcp://opcua-server:4840/freeopcua/server/
+
+networks:
+  process-network:
+    driver: bridge
