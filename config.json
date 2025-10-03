@@ -1,0 +1,151 @@
+{
+	"model_parameters": {
+		"tank_height": 3.0,
+		"tank_diameter": 2.0,
+		"liquid_density": 1000.0,
+		"constant_inlet_flow": 100.0,
+		"initial_liquid_level": 1.5,
+		"initial_valve_opening": 50.0,
+		"gravity": 9.81,
+		"simulation_time_step": 0.1,
+		"tank_cross_section_area": 3.141592653589793
+	},
+	"pid_controller": {
+		"kp": 15.0,
+		"ki": 0.1,
+		"kd": 1.0,
+		"setpoint": 1.6,
+		"output_min": 0.0,
+		"output_max": 100.0,
+		"integral_limit": 5.0,
+		"derivative_filter_time": 0.1
+	},
+	"opcua_variables": {
+		"process_variables": {
+			"PV_level": {
+				"node_id": "ns=2;i=4",
+				"description": "Текущий уровень жидкости в баке",
+				"unit": "м",
+				"initial_value": 1.5
+			},
+			"SP_level": {
+				"node_id": "ns=2;i=5",
+				"description": "Уставка уровня жидкости",
+				"unit": "м",
+				"initial_value": 1.3
+			},
+			"OP_valve": {
+				"node_id": "ns=2;i=6",
+				"description": "Управляющее воздействие на клапан",
+				"unit": "%",
+				"initial_value": 50.0
+			},
+			"outlet_flow": {
+				"node_id": "ns=2;i=7",
+				"description": "Расход через выходной клапан",
+				"unit": "м³/ч",
+				"initial_value": 50.0
+			},
+			"inlet_flow": {
+				"node_id": "ns=2;i=8",
+				"description": "Постоянный входной расход",
+				"unit": "м³/ч",
+				"initial_value": 100.0
+			},
+			"primary_controller_status": {
+				"node_id": "ns=2;i=9",
+				"description": "Статус основного контроллера",
+				"unit": "bool",
+				"initial_value": false
+			},
+			"backup_controller_status": {
+				"node_id": "ns=2;i=10",
+				"description": "Статус резервного контроллера",
+				"unit": "bool",
+				"initial_value": false
+			},
+			"active_controller": {
+				"node_id": "ns=2;i=11",
+				"description": "Активный контроллер (1=основной, 2=резервный)",
+				"unit": "int",
+				"initial_value": 1
+			},
+			"primary_controller_heartbeat": {
+				"node_id": "ns=2;i=12",
+				"description": "Heartbeat основного контроллера",
+				"unit": "timestamp",
+				"initial_value": 0
+			},
+			"backup_controller_heartbeat": {
+				"node_id": "ns=2;i=13",
+				"description": "Heartbeat резервного контроллера",
+				"unit": "timestamp",
+				"initial_value": 0
+			},
+			"pid_integral": {
+				"node_id": "ns=2;i=14",
+				"description": "Интегральная составляющая ПИД",
+				"unit": "float",
+				"initial_value": 0.0
+			},
+			"pid_previous_error": {
+				"node_id": "ns=2;i=15",
+				"description": "Предыдущая ошибка ПИД",
+				"unit": "float",
+				"initial_value": 0.0
+			},
+			"pid_previous_derivative": {
+				"node_id": "ns=2;i=16",
+				"description": "Предыдущая производная ПИД",
+				"unit": "float",
+				"initial_value": 0.0
+			}
+		}
+	},
+	"system_settings": {
+		"opcua_server_port": 4840,
+		"model_update_interval": 0.1,
+		"controller_update_interval": 0.1,
+		"logging_level": "INFO",
+		"controller_heartbeat_timeout": 5.0,
+		"controller_failover_delay": 2.0,
+		"watchdog_update_interval": 5.0
+	},
+	"connection_settings": {
+		"opcua_server": {
+			"host": "opcua-server",
+			"port": 4840,
+			"endpoint": "opc.tcp://opcua-server:4840/freeopcua/server/",
+			"namespace": "ProcessVariables",
+			"timeout": 10.0,
+			"retry_attempts": 3,
+			"retry_delay": 1.0
+		},
+		"database": {
+			"host": "database",
+			"port": 5432,
+			"name": "digital_twin_db",
+			"user": "process_user",
+			"password": "process_password",
+			"admin_user": "postgres",
+			"admin_password": "postgres_password",
+			"connection_timeout": 30.0,
+			"pool_min_size": 2,
+			"pool_max_size": 10
+		},
+		"analytics_api": {
+			"host": "analytics",
+			"port": 8080,
+			"base_url": "http://analytics:8080",
+			"external_url": "http://localhost:8080",
+			"timeout": 30.0,
+			"retry_attempts": 3
+		},
+		"monitoring": {
+			"health_check_interval": 30.0,
+			"log_rotation_size": "10MB",
+			"log_retention_days": 7,
+			"metrics_collection_interval": 60.0
+		}
+	}
+}
