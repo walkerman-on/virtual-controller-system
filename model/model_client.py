@@ -13,6 +13,7 @@ from typing import Dict, Any, Optional
 
 from opcua import Client
 from process_model import ProcessModel
+from database_manager import get_db_manager, DatabaseLogger
 
 # Настройка логирования
 logging.basicConfig(
@@ -44,6 +45,10 @@ class ProcessModelClient:
         
         # Интервал обновления модели
         self.update_interval = self.config['system_settings']['model_update_interval']
+        
+        # Инициализация базы данных
+        self.db_manager = get_db_manager()
+        self.db_logger = None
         
         # Node IDs для переменных
         self.node_ids = {}
@@ -166,6 +171,26 @@ class ProcessModelClient:
             self._set_variable_value('PV_level', result['liquid_level'])
             self._set_variable_value('outlet_flow', result['outlet_flow'])
             
+            # Сохранение данных в базу данных
+            if self.db_manager and self.db_manager.sync_connection:
+                try:
+                    # Получаем дополнительные данные с сервера
+                    sp_level = self._get_variable_value('SP_level') or 2.0
+                    inlet_flow = self._get_variable_value('inlet_flow') or 100.0
+                    tank_pressure = result.get('tank_pressure', 0)
+                    
+                    self.db_manager.save_process_data_sync(
+                        pv_level=result['liquid_level'],
+                        sp_level=sp_level,
+                        op_valve=valve_opening,
+                        outlet_flow=result['outlet_flow'],
+                        inlet_flow=inlet_flow,
+                        tank_pressure=tank_pressure,
+                        valve_position=valve_opening
+                    )
+                except Exception as e:
+                    logger.debug(f"Ошибка сохранения данных процесса в БД: {e}")
+            
             # Логирование состояния
             logger.info(f"Время: {result['simulation_time']:.1f}с, "
                        f"Уровень: {result['liquid_level']:.3f}м, "
@@ -186,6 +211,14 @@ class ProcessModelClient:
     def start_simulation(self):
         """Запуск симуляции модели"""
         logger.info("Запуск симуляции модели процесса")
+        
+        # Инициализация базы данных
+        try:
+            self.db_manager.init_sync_connection()
+            self.db_logger = DatabaseLogger(self.db_manager, "process-model")
+            logger.info("✓ Модель процесса подключена к базе данных")
+        except Exception as e:
+            logger.warning(f"Не удалось подключиться к базе данных: {e}")
         
         # Подключение к серверу
         if not self._connect_to_server():

@@ -110,5 +110,42 @@
 		"controller_heartbeat_timeout": 5.0,
 		"controller_failover_delay": 2.0,
 		"watchdog_update_interval": 5.0
+	},
+	"connection_settings": {
+		"opcua_server": {
+			"host": "opcua-server",
+			"port": 4840,
+			"endpoint": "opc.tcp://opcua-server:4840/freeopcua/server/",
+			"namespace": "ProcessVariables",
+			"timeout": 10.0,
+			"retry_attempts": 3,
+			"retry_delay": 1.0
+		},
+		"database": {
+			"host": "database",
+			"port": 5432,
+			"name": "digital_twin_db",
+			"user": "process_user",
+			"password": "process_password",
+			"admin_user": "postgres",
+			"admin_password": "postgres_password",
+			"connection_timeout": 30.0,
+			"pool_min_size": 2,
+			"pool_max_size": 10
+		},
+		"analytics_api": {
+			"host": "analytics",
+			"port": 8080,
+			"base_url": "http://analytics:8080",
+			"external_url": "http://localhost:8080",
+			"timeout": 30.0,
+			"retry_attempts": 3
+		},
+		"monitoring": {
+			"health_check_interval": 30.0,
+			"log_rotation_size": "10MB",
+			"log_retention_days": 7,
+			"metrics_collection_interval": 60.0
+		}
 	}
 }

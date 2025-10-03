@@ -1,11 +1,43 @@
 services:
+  # База данных PostgreSQL
+  database:
+    image: postgres:15-alpine
+    container_name: digital-twin-db
+    environment:
+      - POSTGRES_DB=digital_twin_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d
+    networks:
+      - process-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres -d digital_twin_db" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
   opcua-server:
     build: ./opcua-server
     container_name: opcua-server
+    depends_on:
+      database:
+        condition: service_healthy
     ports:
       - "4840:4840"
     volumes:
       - ./config.json:/app/config.json
+    environment:
+      - DB_HOST=database
+      - DB_PORT=5432
+      - DB_NAME=digital_twin_db
+      - DB_USER=process_user
+      - DB_PASSWORD=process_password
     networks:
       - process-network
     restart: unless-stopped
@@ -14,28 +46,46 @@ services:
     build: ./model
     container_name: process-model
     depends_on:
-      - opcua-server
+      database:
+        condition: service_healthy
+      opcua-server:
+        condition: service_started
     volumes:
       - ./config.json:/app/config.json
+      - ./database/database_manager.py:/app/database_manager.py
+    environment:
+      - OPCUA_SERVER_URL=opc.tcp://opcua-server:4840/freeopcua/server/
+      - DB_HOST=database
+      - DB_PORT=5432
+      - DB_NAME=digital_twin_db
+      - DB_USER=process_user
+      - DB_PASSWORD=process_password
     networks:
       - process-network
     restart: unless-stopped
-    environment:
-      - OPCUA_SERVER_URL=opc.tcp://opcua-server:4840/freeopcua/server/
 
   controller-primary:
     build: ./controller
     container_name: pid-controller-primary
     depends_on:
-      - opcua-server
+      database:
+        condition: service_healthy
+      opcua-server:
+        condition: service_started
     volumes:
       - ./config.json:/app/config.json
-    networks:
-      - process-network
-    restart: unless-stopped
+      - ./database/database_manager.py:/app/database_manager.py
     environment:
       - OPCUA_SERVER_URL=opc.tcp://opcua-server:4840/freeopcua/server/
       - CONTROLLER_MODE=primary
+      - DB_HOST=database
+      - DB_PORT=5432
+      - DB_NAME=digital_twin_db
+      - DB_USER=process_user
+      - DB_PASSWORD=process_password
+    networks:
+      - process-network
+    restart: unless-stopped
     command: [ "python", "universal_controller.py" ]
     healthcheck:
       test: [ "CMD", "python", "-c", "import socket; s = socket.socket(); s.connect(('opcua-server', 4840)); s.close()" ]
@@ -48,16 +98,26 @@ services:
     build: ./controller
     container_name: pid-controller-backup
     depends_on:
-      - opcua-server
-      - controller-primary
+      database:
+        condition: service_healthy
+      opcua-server:
+        condition: service_started
+      controller-primary:
+        condition: service_started
     volumes:
       - ./config.json:/app/config.json
-    networks:
-      - process-network
-    restart: unless-stopped
+      - ./database/database_manager.py:/app/database_manager.py
     environment:
       - OPCUA_SERVER_URL=opc.tcp://opcua-server:4840/freeopcua/server/
       - CONTROLLER_MODE=backup
+      - DB_HOST=database
+      - DB_PORT=5432
+      - DB_NAME=digital_twin_db
+      - DB_USER=process_user
+      - DB_PASSWORD=process_password
+    networks:
+      - process-network
+    restart: unless-stopped
     command: [ "python", "universal_controller.py" ]
     healthcheck:
       test: [ "CMD", "python", "-c", "import socket; s = socket.socket(); s.connect(('opcua-server', 4840)); s.close()" ]
@@ -69,19 +129,60 @@ services:
     build: ./watchdog
     container_name: controller-watchdog
     depends_on:
-      - opcua-server
-      - controller-primary
-      - controller-backup
+      database:
+        condition: service_healthy
+      opcua-server:
+        condition: service_started
+      controller-primary:
+        condition: service_started
+      controller-backup:
+        condition: service_started
     volumes:
       - ./config.json:/app/config.json
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ./database/database_manager.py:/app/database_manager.py
+    environment:
+      - OPCUA_SERVER_URL=opc.tcp://opcua-server:4840/freeopcua/server/
+      - DB_HOST=database
+      - DB_PORT=5432
+      - DB_NAME=digital_twin_db
+      - DB_USER=process_user
+      - DB_PASSWORD=process_password
     networks:
       - process-network
     restart: unless-stopped
+
+  analytics:
+    build: ./analytics
+    container_name: analytics-service
+    depends_on:
+      database:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./database/database_manager.py:/app/database_manager.py
     environment:
-      - OPCUA_SERVER_URL=opc.tcp://opcua-server:4840/freeopcua/server/
-    privileged: true
+      - DB_HOST=database
+      - DB_PORT=5432
+      - DB_NAME=digital_twin_db
+      - DB_USER=process_user
+      - DB_PASSWORD=process_password
+      - ANALYTICS_PORT=8080
+      - ANALYTICS_HOST=0.0.0.0
+    networks:
+      - process-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
 networks:
   process-network:
     driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local

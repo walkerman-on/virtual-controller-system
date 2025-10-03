@@ -12,6 +12,7 @@ import time
 from typing import Dict, Any, Optional
 
 from opcua import Client
+from database_manager import get_db_manager, DatabaseLogger
 
 # Настройка логирования
 logging.basicConfig(
@@ -146,6 +147,10 @@ class UniversalControllerClient:
         
         # Настройка логирования в зависимости от режима
         self.log_prefix = "ОСНОВНОЙ" if self.is_primary else "РЕЗЕРВНЫЙ"
+        
+        # Инициализация базы данных
+        self.db_manager = get_db_manager()
+        self.db_logger = None
         
         logger.info(f"{self.log_prefix} контроллер инициализирован, сервер: {self.server_url}")
 
@@ -345,6 +350,20 @@ class UniversalControllerClient:
                         if time.time() - other_controller_failed_time >= failover_delay:
                             if not self.is_active:
                                 logger.critical("🚨 ПЕРЕКЛЮЧЕНИЕ НА РЕЗЕРВНЫЙ КОНТРОЛЛЕР!")
+                                
+                                # Сохранение события переключения в БД
+                                if self.db_manager and self.db_manager.async_pool:
+                                    try:
+                                        await self.db_manager.save_failover_event(
+                                            event_type='failover',
+                                            from_controller='primary',
+                                            to_controller='backup',
+                                            reason='Primary controller heartbeat timeout',
+                                            duration_seconds=time.time() - other_controller_failed_time
+                                        )
+                                    except Exception as e:
+                                        logger.debug(f"Ошибка сохранения события переключения: {e}")
+                                
                                 self.is_active = True
                                 self.controller.reset()  # Сбрасываем состояние регулятора
                     else:
@@ -389,6 +408,28 @@ class UniversalControllerClient:
                 # Сохранение состояния PID после успешного расчета
                 await self.save_pid_state()
                 
+                # Сохранение данных в базу данных
+                if self.db_manager and self.db_manager.async_pool:
+                    try:
+                        state = self.controller.get_state()
+                        error = process_value - setpoint
+                        await self.db_manager.save_pid_state(
+                            controller_id=self.mode,
+                            is_active=self.is_active,
+                            kp=self.controller.kp,
+                            ki=self.controller.ki,
+                            kd=self.controller.kd,
+                            integral=state['integral'],
+                            previous_error=state['previous_error'],
+                            previous_derivative=state['previous_derivative'],
+                            setpoint=setpoint,
+                            process_value=process_value,
+                            output=output,
+                            error_value=error
+                        )
+                    except Exception as e:
+                        logger.debug(f"Ошибка сохранения данных в БД: {e}")
+                
                 error = process_value - setpoint
                 logger.info(f"{self.log_prefix} ПИ расчет: SP={setpoint:.3f}, PV={process_value:.3f}, "
                            f"Error={error:.3f}, P={self.controller.kp * error:.3f}, "
@@ -419,6 +460,14 @@ class UniversalControllerClient:
     async def run(self):
         """Запуск контроллера"""
         logger.info(f"🔄 Инициализация {self.log_prefix.lower()} контроллера...")
+        
+        # Инициализация базы данных
+        try:
+            await self.db_manager.init_async_pool(min_size=2, max_size=5)
+            self.db_logger = DatabaseLogger(self.db_manager, f"controller-{self.mode}")
+            logger.info(f"✓ {self.log_prefix} контроллер подключен к базе данных")
+        except Exception as e:
+            logger.warning(f"Не удалось подключиться к базе данных: {e}")
         
         # Подключение к серверу
         if not await self.connect_to_server():
