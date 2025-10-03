@@ -40,13 +40,13 @@ class ProcessOPCUAServer:
         try:
             with open(self.config_path, 'r', encoding='utf-8') as f:
                 config = json.load(f)
-            logger.info(f"Конфигурация загружена из {self.config_path}")
+            logger.info(f"📋 Конфигурация загружена из {self.config_path}")
             return config
         except FileNotFoundError:
-            logger.error(f"Файл конфигурации {self.config_path} не найден")
+            logger.error(f"❌ Файл конфигурации {self.config_path} не найден")
             raise
         except json.JSONDecodeError as e:
-            logger.error(f"Ошибка парсинга JSON: {e}")
+            logger.error(f"❌ Ошибка парсинга JSON: {e}")
             raise
     
     def _setup_server(self):
@@ -70,7 +70,7 @@ class ProcessOPCUAServer:
         # Создание переменных
         self._create_variables()
         
-        logger.info(f"OPC UA сервер настроен на endpoint: {endpoint}")
+        logger.info(f"🔗 OPC UA сервер настроен на endpoint: {endpoint}")
     
     def _create_objects(self):
         """Создание объектов в адресном пространстве"""
@@ -89,7 +89,7 @@ class ProcessOPCUAServer:
             self.namespace, "Controller"
         )
         
-        logger.info("Объекты адресного пространства созданы")
+        logger.info("🏗️ Объекты адресного пространства созданы")
     
     def _create_variables(self):
         """Создание переменных на основе конфигурации"""
@@ -121,7 +121,7 @@ class ProcessOPCUAServer:
             # Сохранение ссылки на переменную
             self.variables[var_name] = var_node
             
-            logger.info(f"Переменная {var_name} создана со значением {initial_value}")
+            logger.info(f"📊 Переменная {var_name} создана со значением {initial_value}")
     
     def start_server(self):
         """Запуск OPC UA сервера"""
@@ -130,17 +130,17 @@ class ProcessOPCUAServer:
             
             # Запуск сервера
             self.server.start()
-            logger.info("OPC UA сервер запущен")
+            logger.info("🚀 OPC UA сервер запущен")
             
             # Вывод информации о доступных переменных
-            logger.info("Доступные переменные:")
+            logger.info("📋 Доступные переменные:")
             for var_name, var_node in self.variables.items():
-                logger.info(f"  - {var_name}: {var_node.get_value()}")
+                logger.info(f"  📊 {var_name}: {var_node.get_value()}")
             
             return True
             
         except Exception as e:
-            logger.error(f"Ошибка запуска сервера: {e}")
+            logger.error(f"❌ Ошибка запуска сервера: {e}")
             return False
     
     def stop_server(self):
@@ -148,49 +148,49 @@ class ProcessOPCUAServer:
         if self.server:
             try:
                 self.server.stop()
-                logger.info("OPC UA сервер остановлен")
+                logger.info("🛑 OPC UA сервер остановлен")
             except Exception as e:
-                logger.error(f"Ошибка остановки сервера: {e}")
+                logger.error(f"❌ Ошибка остановки сервера: {e}")
     
     def get_variable_value(self, var_name: str):
         """Получение значения переменной"""
         if var_name in self.variables:
             return self.variables[var_name].get_value()
         else:
-            logger.warning(f"Переменная {var_name} не найдена")
+            logger.warning(f"⚠️ Переменная {var_name} не найдена")
             return None
     
     def set_variable_value(self, var_name: str, value):
         """Установка значения переменной"""
         if var_name in self.variables:
             self.variables[var_name].set_value(value)
-            logger.debug(f"Переменная {var_name} установлена в {value}")
+            logger.debug(f"📝 Переменная {var_name} установлена в {value}")
         else:
-            logger.warning(f"Переменная {var_name} не найдена")
+            logger.warning(f"⚠️ Переменная {var_name} не найдена")
 
 
 def main():
     """Основная функция запуска сервера"""
-    logger.info("Запуск OPC UA сервера для цифрового двойника процесса")
+    logger.info("🚀 Запуск OPC UA сервера для цифрового двойника процесса")
     
     # Создание и запуск сервера
     server = ProcessOPCUAServer()
     
     try:
         if server.start_server():
-            logger.info("Сервер успешно запущен. Нажмите Ctrl+C для остановки")
+            logger.info("✅ Сервер успешно запущен. Нажмите Ctrl+C для остановки")
             
             # Основной цикл
             while True:
                 asyncio.sleep(1)
                 
     except KeyboardInterrupt:
-        logger.info("Получен сигнал остановки")
+        logger.info("🛑 Получен сигнал остановки")
     except Exception as e:
-        logger.error(f"Критическая ошибка: {e}")
+        logger.error(f"💥 Критическая ошибка: {e}")
     finally:
         server.stop_server()
-        logger.info("Сервер остановлен")
+        logger.info("👋 Сервер остановлен")
 
 
 if __name__ == "__main__":

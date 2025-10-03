@@ -1,6 +1,6 @@
-# Цифровой двойник нефтегазового процесса с резервным контроллером и базой данных
+# Цифровой двойник технологического процесса с API управления
 
-Система цифрового двойника технологического процесса с использованием Python, Docker и OPC UA для моделирования и управления уровнем жидкости в баке. Включает отказоустойчивую архитектуру с автоматическим переключением между основным и резервным контроллерами, PostgreSQL базу данных для хранения исторических данных и REST API сервис для аналитики и отчетности.
+Система цифрового двойника технологического процесса с использованием Python, Docker и OPC UA для моделирования и управления уровнем жидкости в баке. Включает отказоустойчивую архитектуру с автоматическим переключением между основным и резервным контроллерами, PostgreSQL базу данных для хранения исторических данных и REST API сервис для аналитики, отчетности и управления уставкой.
 
 ## Описание проекта
 
@@ -15,6 +15,7 @@
 - 💾 **Сохранение состояния PID** - восстановление интегральной составляющей при переключениях
 - 📊 **База данных PostgreSQL** - хранение исторических данных процесса и контроллеров
 - 🔍 **REST API аналитики** - получение статистики, отчетов и метрик производительности
+- 🎯 **API управления уставкой** - изменение уставки уровня через REST API
 - 📡 **OPC UA интеграция** - стандартный промышленный протокол
 - 🐳 **Контейнеризация** - легкое развертывание и масштабирование
 - 🔧 **Модульная архитектура** - возможность расширения функциональности
@@ -107,12 +108,12 @@
 
 ```
 ├── docker-compose.yml          # Конфигурация Docker Compose
-├── config.json                 # Конфигурация системы (включая connection_settings)
+├── config.json                 # Конфигурация системы
 ├── docker.env                  # Переменные окружения Docker
 ├── CONNECTION_SETTINGS.md      # Документация по настройкам подключения
-├── show_connections.py         # Скрипт для просмотра всех URL и настроек
 ├── start_system.sh             # Скрипт запуска системы
-├── monitor_system.py           # Скрипт мониторинга системы
+├── test_setpoint_api.sh        # Скрипт тестирования API уставки
+├── SETPOINT_API.md             # Документация API управления уставкой
 ├── opcua-server/               # OPC UA сервер
 │   ├── Dockerfile
 │   ├── requirements.txt
@@ -121,28 +122,24 @@
 │   ├── Dockerfile
 │   ├── requirements.txt
 │   ├── process_model.py        # Базовые классы модели
-│   ├── model_client.py         # Клиент модели
-│   └── database_manager.py     # Менеджер базы данных
+│   └── model_client.py         # Клиент модели
 ├── controller/                 # Универсальный контроллер
 │   ├── Dockerfile
 │   ├── requirements.txt
-│   ├── universal_controller.py # Основной + резервный
-│   └── database_manager.py    # Менеджер базы данных
+│   └── universal_controller.py # Основной + резервный
 ├── watchdog/                   # Мониторинг контроллеров
 │   ├── Dockerfile
 │   ├── requirements.txt
-│   ├── simple_watchdog.py     # Простой watchdog
-│   └── database_manager.py    # Менеджер базы данных
+│   └── simple_watchdog.py     # Простой watchdog
 ├── database/                   # База данных PostgreSQL
 │   ├── Dockerfile
 │   ├── init/
 │   │   └── 01_init_schema.sql # Скрипт инициализации БД
 │   └── database_manager.py    # Менеджер базы данных
-└── analytics/                  # Сервис аналитики
+└── analytics/                  # Сервис аналитики и API
     ├── Dockerfile
     ├── requirements.txt
-    ├── analytics_service.py    # REST API сервис
-    └── database_manager.py    # Менеджер базы данных
+    └── analytics_service.py    # REST API сервис с управлением уставкой
 ```
 
 ## Конфигурация
@@ -214,22 +211,21 @@
 
 ### 📁 Файлы конфигурации
 
-- **`config.json`** - Основная конфигурация системы (включая `connection_settings`)
+- **`config.json`** - Основная конфигурация системы
 - **`docker.env`** - Переменные окружения для Docker Compose
 - **`CONNECTION_SETTINGS.md`** - Подробная документация по настройкам подключения
-- **`show_connections.py`** - Скрипт для просмотра всех URL и настроек
 
 ### 🚀 Быстрый просмотр настроек
 
 ```bash
-# Показать все настройки подключения
-python3 show_connections.py
-
 # Проверить состояние API
 curl http://localhost:8080/health
 
 # Последние данные процесса
 curl http://localhost:8080/api/process/latest?limit=5
+
+# Получить текущую уставку
+curl http://localhost:8080/api/setpoint/current
 ```
 
 ## Установка и запуск
@@ -414,6 +410,23 @@ GET /api/system/performance?hours=24
 GET /api/config/current
 ```
 
+#### API управления уставкой
+```bash
+# Получение текущей уставки
+GET /api/setpoint/current
+
+# Установка новой уставки
+POST /api/setpoint
+Content-Type: application/json
+{
+  "setpoint": 1.6,
+  "reason": "Оптимизация процесса"
+}
+
+# История изменений уставки
+GET /api/setpoint/history?limit=10
+```
+
 ### Примеры использования API
 
 #### Получение последних данных процесса
@@ -431,24 +444,36 @@ curl -s "http://localhost:8080/api/process/statistics?hours=1" | python3 -m json
 curl -s "http://localhost:8080/api/controller/pid-history?limit=3" | python3 -m json.tool
 ```
 
-### Мониторинг системы
-
-Для удобного мониторинга системы создан скрипт `monitor_system.py`:
-
+#### Управление уставкой
 ```bash
-# Разовый мониторинг
-python3 monitor_system.py
+# Получить текущую уставку
+curl -s "http://localhost:8080/api/setpoint/current" | python3 -m json.tool
 
-# Непрерывный мониторинг (обновление каждые 10 секунд)
-python3 monitor_system.py --watch --interval 10
+# Установить новую уставку
+curl -X POST "http://localhost:8080/api/setpoint" \
+  -H "Content-Type: application/json" \
+  -d '{"setpoint": 1.6, "reason": "Оптимизация процесса"}' | python3 -m json.tool
+
+# Посмотреть историю изменений
+curl -s "http://localhost:8080/api/setpoint/history?limit=5" | python3 -m json.tool
 ```
 
-Скрипт показывает:
-- Статус сервиса и подключения к БД
-- Последние данные процесса
-- Статистику за период
-- Состояние PID контроллера
-- События переключения
+### Мониторинг системы
+
+Для тестирования API управления уставкой используйте предоставленный скрипт:
+
+```bash
+# Автоматическое тестирование API уставки
+./test_setpoint_api.sh
+```
+
+Скрипт автоматически:
+- Проверяет доступность API
+- Тестирует получение текущей уставки
+- Тестирует установку различных значений
+- Проверяет обработку некорректных значений
+- Просматривает историю изменений
+- Возвращает исходную уставку
 
 ### Прямая работа с базой данных
 
@@ -561,7 +586,33 @@ docker-compose restart controller-primary controller-backup
 
 ### Изменение уставки
 
-Можно изменить уставку через OPC UA клиент или отредактировав `config.json`.
+Уставку можно изменить несколькими способами:
+
+1. **Через REST API (рекомендуется):**
+   ```bash
+   curl -X POST "http://localhost:8080/api/setpoint" \
+     -H "Content-Type: application/json" \
+     -d '{"setpoint": 1.6, "reason": "Оптимизация процесса"}'
+   ```
+
+2. **Через OPC UA клиент:**
+   ```python
+   from opcua import Client
+   
+   client = Client("opc.tcp://localhost:4840/freeopcua/server/")
+   client.connect()
+   
+   setpoint_node = client.get_node("ns=2;i=5")
+   setpoint_node.set_value(1.6)
+   
+   client.disconnect()
+   ```
+
+3. **Через редактирование config.json:**
+   Отредактируйте файл `config.json` и перезапустите контроллеры:
+   ```bash
+   docker-compose restart controller-primary controller-backup
+   ```
 
 ## Расширение системы
 

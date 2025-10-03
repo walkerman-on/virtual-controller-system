@@ -53,14 +53,14 @@ class PIDController:
         self.integral = 0.0
         self.previous_derivative = 0.0
         
-        logger.info(f"ПИД-регулятор инициализирован: Kp={kp}, Ki={ki}, Kd={kd}")
+        logger.info(f"🎛️ ПИД-регулятор инициализирован: Kp={kp}, Ki={ki}, Kd={kd}")
 
     def reset(self):
         """Сброс состояния регулятора"""
         self.previous_error = 0.0
         self.integral = 0.0
         self.previous_derivative = 0.0
-        logger.info("Состояние ПИД-регулятора сброшено")
+        logger.info("🔄 Состояние ПИД-регулятора сброшено")
     
     def get_state(self) -> Dict[str, float]:
         """Получение текущего состояния регулятора"""
@@ -75,7 +75,7 @@ class PIDController:
         self.integral = state.get('integral', 0.0)
         self.previous_error = state.get('previous_error', 0.0)
         self.previous_derivative = state.get('previous_derivative', 0.0)
-        logger.info(f"Состояние ПИД-регулятора восстановлено: integral={self.integral:.3f}, prev_error={self.previous_error:.3f}")
+        logger.info(f"💾 Состояние ПИД-регулятора восстановлено: integral={self.integral:.3f}, prev_error={self.previous_error:.3f}")
 
     def calculate(self, setpoint: float, process_value: float, dt: float) -> float:
         """
@@ -152,14 +152,14 @@ class UniversalControllerClient:
         self.db_manager = get_db_manager()
         self.db_logger = None
         
-        logger.info(f"{self.log_prefix} контроллер инициализирован, сервер: {self.server_url}")
+        logger.info(f"🔗 {self.log_prefix} контроллер инициализирован, сервер: {self.server_url}")
 
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Загрузка конфигурации из файла"""
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
                 config = json.load(f)
-                logger.info("Конфигурация загружена успешно")
+                logger.info("📋 Конфигурация загружена успешно")
                 return config
         except Exception as e:
             logger.error(f"Ошибка загрузки конфигурации: {e}")
@@ -170,7 +170,7 @@ class UniversalControllerClient:
         try:
             self.client = Client(self.server_url)
             self.client.connect()
-            logger.info(f"✓ {self.log_prefix} контроллер подключился к OPC UA серверу")
+            logger.info(f"✅ {self.log_prefix} контроллер подключился к OPC UA серверу")
             return True
         except Exception as e:
             logger.error(f"Ошибка подключения {self.log_prefix.lower()} контроллера к серверу: {e}")
@@ -181,7 +181,7 @@ class UniversalControllerClient:
         if self.client:
             try:
                 self.client.disconnect()
-                logger.info(f"{self.log_prefix} контроллер отключился от OPC UA сервера")
+                logger.info(f"🔌 {self.log_prefix} контроллер отключился от OPC UA сервера")
             except Exception as e:
                 logger.error(f"Ошибка отключения от сервера: {e}")
 
@@ -298,10 +298,10 @@ class UniversalControllerClient:
                         'previous_derivative': previous_derivative
                     }
                     self.controller.set_state(state)
-                    logger.info(f"{self.log_prefix} контроллер восстановил состояние PID из OPC UA")
+                    logger.info(f"💾 {self.log_prefix} контроллер восстановил состояние PID из OPC UA")
                     return True
                 else:
-                    logger.info(f"{self.log_prefix} контроллер начинает с чистого состояния PID")
+                    logger.info(f"🆕 {self.log_prefix} контроллер начинает с чистого состояния PID")
                     return False
             except Exception as e:
                 logger.error(f"Ошибка восстановления состояния PID: {e}")
@@ -431,13 +431,13 @@ class UniversalControllerClient:
                         logger.debug(f"Ошибка сохранения данных в БД: {e}")
                 
                 error = process_value - setpoint
-                logger.info(f"{self.log_prefix} ПИ расчет: SP={setpoint:.3f}, PV={process_value:.3f}, "
+                logger.info(f"🎛️ {self.log_prefix} ПИ расчет: SP={setpoint:.3f}, PV={process_value:.3f}, "
                            f"Error={error:.3f}, P={self.controller.kp * error:.3f}, "
                            f"I={(1.0 / self.controller.ki) * self.controller.integral:.3f}, "
                            f"D=0.000, OP_start=50.0, Output={output:.3f}")
-                logger.info(f"{self.log_prefix} PID расчет: SP={setpoint:.3f}м, PV={process_value:.3f}м, "
+                logger.info(f"🎛️ {self.log_prefix} PID расчет: SP={setpoint:.3f}м, PV={process_value:.3f}м, "
                            f"Error={error:.3f}м, Output={output:.3f}")
-                logger.info(f"{self.log_prefix} PID: SP={setpoint:.3f}м, PV={process_value:.3f}м, "
+                logger.info(f"🎛️ {self.log_prefix} PID: SP={setpoint:.3f}м, PV={process_value:.3f}м, "
                            f"Error={error:.3f}м, OP={output:.1f}%")
             else:
                 logger.error("Не удалось установить управляющее воздействие")
@@ -453,7 +453,7 @@ class UniversalControllerClient:
             op = await self.get_variable_value('OP_valve')
             
             if sp is not None and pv is not None and op is not None:
-                logger.info(f"{self.log_prefix} (мониторинг): SP={sp:.3f}м, PV={pv:.3f}м, OP={op:.1f}%")
+                logger.info(f"👁️ {self.log_prefix} (мониторинг): SP={sp:.3f}м, PV={pv:.3f}м, OP={op:.1f}%")
         except Exception as e:
             logger.error(f"Ошибка мониторинга: {e}")
 
@@ -465,7 +465,7 @@ class UniversalControllerClient:
         try:
             await self.db_manager.init_async_pool(min_size=2, max_size=5)
             self.db_logger = DatabaseLogger(self.db_manager, f"controller-{self.mode}")
-            logger.info(f"✓ {self.log_prefix} контроллер подключен к базе данных")
+            logger.info(f"✅ {self.log_prefix} контроллер подключен к базе данных")
         except Exception as e:
             logger.warning(f"Не удалось подключиться к базе данных: {e}")
         
@@ -478,7 +478,7 @@ class UniversalControllerClient:
             self.running = True
             await self.control_loop()
         except KeyboardInterrupt:
-            logger.info("Получен сигнал остановки")
+            logger.info("🛑 Получен сигнал остановки")
         except Exception as e:
             logger.error(f"Критическая ошибка: {e}")
         finally:
@@ -489,7 +489,7 @@ class UniversalControllerClient:
             else:
                 await self.set_variable_value('backup_controller_status', False)
             await self.disconnect_from_server()
-            logger.info(f"{self.log_prefix} контроллер остановлен")
+            logger.info(f"⏹️ {self.log_prefix} контроллер остановлен")
 
 
 async def main():

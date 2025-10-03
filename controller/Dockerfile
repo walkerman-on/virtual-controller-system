@@ -23,4 +23,4 @@ RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 
 # Команда запуска
-CMD ["python", "controller_client.py"]
+CMD ["python", "universal_controller.py"]

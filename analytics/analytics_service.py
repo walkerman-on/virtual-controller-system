@@ -13,6 +13,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from opcua import Client
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -23,6 +24,9 @@ CORS(app)
 
 # Глобальное подключение к БД
 db_connection = None
+
+# OPC UA клиент для изменения уставки
+opcua_client = None
 
 
 def init_database():
@@ -36,10 +40,71 @@ def init_database():
             user=os.getenv('DB_USER', 'process_user'),
             password=os.getenv('DB_PASSWORD', 'process_password')
         )
-        logger.info("✓ Сервис аналитики подключен к базе данных")
+        logger.info("✅ Сервис аналитики подключен к базе данных")
     except Exception as e:
         logger.error(f"Ошибка подключения к БД: {e}")
         db_connection = None
+
+
+def init_opcua_client():
+    """Инициализация OPC UA клиента для изменения уставки"""
+    global opcua_client
+    try:
+        opcua_server_url = os.getenv('OPCUA_SERVER_URL', 'opc.tcp://opcua-server:4840/freeopcua/server/')
+        opcua_client = Client(opcua_server_url)
+        opcua_client.connect()
+        logger.info("🔗 Сервис аналитики подключен к OPC UA серверу")
+    except Exception as e:
+        logger.error(f"Ошибка подключения к OPC UA серверу: {e}")
+        opcua_client = None
+
+
+def set_opcua_setpoint(new_setpoint: float) -> bool:
+    """Установка новой уставки через OPC UA"""
+    global opcua_client
+    
+    if not opcua_client:
+        logger.error("OPC UA клиент не инициализирован")
+        return False
+    
+    try:
+        # Node ID для уставки уровня (SP_level)
+        setpoint_node_id = "ns=2;i=5"
+        setpoint_node = opcua_client.get_node(setpoint_node_id)
+        
+        # Устанавливаем новое значение уставки
+        setpoint_node.set_value(new_setpoint)
+        
+        logger.info(f"✅ Уставка успешно изменена на {new_setpoint}м")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Ошибка установки уставки: {e}")
+        return False
+
+
+def get_opcua_setpoint() -> Optional[float]:
+    """Получение текущей уставки через OPC UA"""
+    global opcua_client
+    
+    if not opcua_client:
+        logger.error("OPC UA клиент не инициализирован")
+        return None
+    
+    try:
+        # Node ID для уставки уровня (SP_level)
+        setpoint_node_id = "ns=2;i=5"
+        setpoint_node = opcua_client.get_node(setpoint_node_id)
+        
+        # Получаем текущее значение уставки
+        current_setpoint = setpoint_node.get_value()
+        
+        logger.info(f"📊 Текущая уставка: {current_setpoint}м")
+        return current_setpoint
+        
+    except Exception as e:
+        logger.error(f"Ошибка получения уставки: {e}")
+        return None
 
 
 @app.route('/health', methods=['GET'])
@@ -308,13 +373,149 @@ def get_current_config():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/setpoint/current', methods=['GET'])
+def get_current_setpoint():
+    """Получение текущей уставки уровня"""
+    try:
+        current_setpoint = get_opcua_setpoint()
+        
+        if current_setpoint is None:
+            return jsonify({
+                'success': False,
+                'error': 'Не удалось получить текущую уставку'
+            }), 500
+        
+        return jsonify({
+            'success': True,
+            'setpoint': current_setpoint,
+            'unit': 'м',
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Ошибка получения уставки: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/setpoint', methods=['POST'])
+def set_setpoint():
+    """Установка новой уставки уровня"""
+    try:
+        # Получаем данные из запроса
+        data = request.get_json()
+        
+        if not data or 'setpoint' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'Не указана уставка в запросе'
+            }), 400
+        
+        new_setpoint = float(data['setpoint'])
+        
+        # Проверяем диапазон значений (0.5 - 2.5 метра)
+        if new_setpoint < 0.5 or new_setpoint > 2.5:
+            return jsonify({
+                'success': False,
+                'error': 'Уставка должна быть в диапазоне от 0.5 до 2.5 метров'
+            }), 400
+        
+        # Получаем старую уставку для логирования
+        old_setpoint = get_opcua_setpoint()
+        
+        # Устанавливаем новую уставку
+        success = set_opcua_setpoint(new_setpoint)
+        
+        if not success:
+            return jsonify({
+                'success': False,
+                'error': 'Не удалось установить новую уставку'
+            }), 500
+        
+        # Логируем изменение в базу данных
+        if db_connection:
+            try:
+                with db_connection.cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO controller_data.setpoint_changes 
+                        (old_setpoint, new_setpoint, changed_by, change_reason, timestamp)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (
+                        old_setpoint,
+                        new_setpoint,
+                        'api',
+                        data.get('reason', 'API request'),
+                        datetime.now()
+                    ))
+                    db_connection.commit()
+            except Exception as e:
+                logger.warning(f"Не удалось сохранить изменение уставки в БД: {e}")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Уставка успешно изменена с {old_setpoint}м на {new_setpoint}м',
+            'old_setpoint': old_setpoint,
+            'new_setpoint': new_setpoint,
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': 'Некорректное значение уставки'
+        }), 400
+    except Exception as e:
+        logger.error(f"Ошибка установки уставки: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/setpoint/history', methods=['GET'])
+def get_setpoint_history():
+    """Получение истории изменений уставки"""
+    if not db_connection:
+        return jsonify({'error': 'База данных не подключена'}), 500
+    
+    try:
+        limit = int(request.args.get('limit', 50))
+        
+        with db_connection.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                SELECT timestamp, old_setpoint, new_setpoint, changed_by, change_reason
+                FROM controller_data.setpoint_changes 
+                ORDER BY timestamp DESC 
+                LIMIT %s
+            """, (limit,))
+            
+            records = cursor.fetchall()
+            
+            # Преобразуем datetime в строки для JSON
+            data = []
+            for record in records:
+                record_dict = dict(record)
+                if 'timestamp' in record_dict:
+                    record_dict['timestamp'] = record_dict['timestamp'].isoformat()
+                data.append(record_dict)
+            
+            return jsonify({
+                'success': True,
+                'count': len(data),
+                'data': data
+            })
+            
+    except Exception as e:
+        logger.error(f"Ошибка получения истории уставки: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 if __name__ == '__main__':
     # Инициализация базы данных
     init_database()
+    
+    # Инициализация OPC UA клиента
+    init_opcua_client()
     
     # Запуск сервера
     port = int(os.getenv('ANALYTICS_PORT', '8080'))
     host = os.getenv('ANALYTICS_HOST', '0.0.0.0')
     
-    logger.info(f"Запуск сервиса аналитики на {host}:{port}")
+    logger.info(f"🚀 Запуск сервиса аналитики на {host}:{port}")
     app.run(host=host, port=port, debug=False)

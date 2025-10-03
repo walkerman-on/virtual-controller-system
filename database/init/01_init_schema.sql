@@ -161,6 +161,23 @@ ON process_data.performance_metrics(timestamp);
 CREATE INDEX IF NOT EXISTS idx_performance_metrics_name 
 ON process_data.performance_metrics(metric_name);
 
+-- Таблица для хранения истории изменений уставки
+CREATE TABLE IF NOT EXISTS controller_data.setpoint_changes (
+    id BIGSERIAL PRIMARY KEY,
+    timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    old_setpoint REAL NOT NULL,               -- Старая уставка
+    new_setpoint REAL NOT NULL,               -- Новая уставка
+    changed_by VARCHAR(100) NOT NULL,         -- Кто изменил ('api', 'operator', 'system')
+    change_reason TEXT,                       -- Причина изменения
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Индексы для изменений уставки
+CREATE INDEX IF NOT EXISTS idx_setpoint_changes_timestamp 
+ON controller_data.setpoint_changes(timestamp);
+CREATE INDEX IF NOT EXISTS idx_setpoint_changes_changed_by 
+ON controller_data.setpoint_changes(changed_by);
+
 -- Создание пользователей и прав доступа
 DO $$
 BEGIN

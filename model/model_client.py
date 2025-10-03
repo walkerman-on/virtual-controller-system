@@ -59,13 +59,13 @@ class ProcessModelClient:
         try:
             with open(self.config_path, 'r', encoding='utf-8') as f:
                 config = json.load(f)
-            logger.info(f"Конфигурация модели загружена из {self.config_path}")
+            logger.info(f"📋 Конфигурация модели загружена из {self.config_path}")
             return config
         except FileNotFoundError:
-            logger.error(f"Файл конфигурации {self.config_path} не найден")
+            logger.error(f"❌ Файл конфигурации {self.config_path} не найден")
             raise
         except json.JSONDecodeError as e:
-            logger.error(f"Ошибка парсинга JSON: {e}")
+            logger.error(f"❌ Ошибка парсинга JSON: {e}")
             raise
     
     def _setup_node_ids(self):
@@ -75,17 +75,17 @@ class ProcessModelClient:
         for var_name, var_config in pv_config.items():
             self.node_ids[var_name] = var_config['node_id']
             
-        logger.info("Node IDs настроены")
+        logger.info("🔗 Node IDs настроены")
     
     def _connect_to_server(self) -> bool:
         """Подключение к OPC UA серверу"""
         try:
             self.client = Client(self.server_url)
             self.client.connect()
-            logger.info(f"Подключение к OPC UA серверу: {self.server_url}")
+            logger.info(f"🔗 Подключение к OPC UA серверу: {self.server_url}")
             return True
         except Exception as e:
-            logger.error(f"Ошибка подключения к серверу: {e}")
+            logger.error(f"❌ Ошибка подключения к серверу: {e}")
             return False
     
     def _disconnect_from_server(self):
@@ -93,24 +93,24 @@ class ProcessModelClient:
         if self.client:
             try:
                 self.client.disconnect()
-                logger.info("Отключение от OPC UA сервера")
+                logger.info("🔌 Отключение от OPC UA сервера")
             except Exception as e:
-                logger.error(f"Ошибка отключения: {e}")
+                logger.error(f"❌ Ошибка отключения: {e}")
     
     def _get_variable_value(self, var_name: str) -> Optional[float]:
         """Получение значения переменной с сервера"""
         try:
             node_id = self.node_ids.get(var_name)
             if not node_id:
-                logger.warning(f"Node ID для переменной {var_name} не найден")
+                logger.warning(f"⚠️ Node ID для переменной {var_name} не найден")
                 return None
                 
             node = self.client.get_node(node_id)
             value = node.get_value()
-            logger.debug(f"Получено значение {var_name}: {value}")
+            logger.debug(f"📥 Получено значение {var_name}: {value}")
             return value
         except Exception as e:
-            logger.error(f"Ошибка получения значения {var_name}: {e}")
+            logger.error(f"❌ Ошибка получения значения {var_name}: {e}")
             return None
     
     def _set_variable_value(self, var_name: str, value: float):
@@ -118,14 +118,14 @@ class ProcessModelClient:
         try:
             node_id = self.node_ids.get(var_name)
             if not node_id:
-                logger.warning(f"Node ID для переменной {var_name} не найден")
+                logger.warning(f"⚠️ Node ID для переменной {var_name} не найден")
                 return
                 
             node = self.client.get_node(node_id)
             node.set_value(value)
-            logger.debug(f"Установлено значение {var_name}: {value}")
+            logger.debug(f"📤 Установлено значение {var_name}: {value}")
         except Exception as e:
-            logger.error(f"Ошибка установки значения {var_name}: {e}")
+            logger.error(f"❌ Ошибка установки значения {var_name}: {e}")
     
     def _initialize_model(self):
         """Инициализация модели процесса"""
@@ -148,11 +148,11 @@ class ProcessModelClient:
             initial_flow = model_params.get('constant_inlet_flow', 100.0)
             self._set_variable_value('inlet_flow', initial_flow)
             
-            logger.info("Модель процесса инициализирована")
+            logger.info("🏭 Модель процесса инициализирована")
             return True
             
         except Exception as e:
-            logger.error(f"Ошибка инициализации модели: {e}")
+            logger.error(f"❌ Ошибка инициализации модели: {e}")
             return False
     
     def _run_simulation_step(self):
@@ -161,7 +161,7 @@ class ProcessModelClient:
             # Получение текущего управляющего воздействия с сервера
             valve_opening = self._get_variable_value('OP_valve')
             if valve_opening is None:
-                logger.warning("Не удалось получить значение OP_valve, используем предыдущее")
+                logger.warning("⚠️ Не удалось получить значение OP_valve, используем предыдущее")
                 valve_opening = 50.0
             
             # Расчет модели
@@ -192,48 +192,48 @@ class ProcessModelClient:
                     logger.debug(f"Ошибка сохранения данных процесса в БД: {e}")
             
             # Логирование состояния
-            logger.info(f"Время: {result['simulation_time']:.1f}с, "
-                       f"Уровень: {result['liquid_level']:.3f}м, "
-                       f"Клапан: {result['valve_opening']:.1f}%, "
-                       f"Расход: {result['outlet_flow']:.1f}м³/ч")
+            logger.info(f"⏱️ Время: {result['simulation_time']:.1f}с, "
+                       f"📊 Уровень: {result['liquid_level']:.3f}м, "
+                       f"🔧 Клапан: {result['valve_opening']:.1f}%, "
+                       f"💧 Расход: {result['outlet_flow']:.1f}м³/ч")
             
             # Отладочная информация
             tank_pressure = result.get('tank_pressure', 0)
             atmospheric_pressure = 101325.0
             total_pressure = atmospheric_pressure + tank_pressure
-            logger.info(f"Отладка: гидростатическое_давление={tank_pressure:.1f}Па, "
+            logger.info(f"🔍 Отладка: гидростатическое_давление={tank_pressure:.1f}Па, "
                        f"полное_давление={total_pressure:.1f}Па, "
                        f"плотность={self.config.get('liquid_density', 1000.0)}кг/м³")
             
         except Exception as e:
-            logger.error(f"Ошибка выполнения шага симуляции: {e}")
+            logger.error(f"❌ Ошибка выполнения шага симуляции: {e}")
     
     def start_simulation(self):
         """Запуск симуляции модели"""
-        logger.info("Запуск симуляции модели процесса")
+        logger.info("🚀 Запуск симуляции модели процесса")
         
         # Инициализация базы данных
         try:
             self.db_manager.init_sync_connection()
             self.db_logger = DatabaseLogger(self.db_manager, "process-model")
-            logger.info("✓ Модель процесса подключена к базе данных")
+            logger.info("✅ Модель процесса подключена к базе данных")
         except Exception as e:
-            logger.warning(f"Не удалось подключиться к базе данных: {e}")
+            logger.warning(f"⚠️ Не удалось подключиться к базе данных: {e}")
         
         # Подключение к серверу
         if not self._connect_to_server():
-            logger.error("Не удалось подключиться к серверу")
+            logger.error("❌ Не удалось подключиться к серверу")
             return False
         
         # Инициализация модели
         if not self._initialize_model():
-            logger.error("Не удалось инициализировать модель")
+            logger.error("❌ Не удалось инициализировать модель")
             self._disconnect_from_server()
             return False
         
         # Запуск основного цикла симуляции
         self.running = True
-        logger.info("Симуляция запущена")
+        logger.info("▶️ Симуляция запущена")
         
         try:
             while self.running:
@@ -250,23 +250,23 @@ class ProcessModelClient:
                     time.sleep(sleep_time)
                     
         except KeyboardInterrupt:
-            logger.info("Получен сигнал остановки")
+            logger.info("🛑 Получен сигнал остановки")
         except Exception as e:
-            logger.error(f"Критическая ошибка симуляции: {e}")
+            logger.error(f"💥 Критическая ошибка симуляции: {e}")
         finally:
             self.running = False
             self._disconnect_from_server()
-            logger.info("Симуляция остановлена")
+            logger.info("⏹️ Симуляция остановлена")
     
     def stop_simulation(self):
         """Остановка симуляции"""
         self.running = False
-        logger.info("Запрос на остановку симуляции")
+        logger.info("🛑 Запрос на остановку симуляции")
 
 
 def main():
     """Основная функция запуска модели"""
-    logger.info("Запуск модели технологического процесса")
+    logger.info("🏭 Запуск модели технологического процесса")
     
     # Создание и запуск клиента модели
     model_client = ProcessModelClient()
@@ -274,9 +274,9 @@ def main():
     try:
         model_client.start_simulation()
     except Exception as e:
-        logger.error(f"Критическая ошибка: {e}")
+        logger.error(f"💥 Критическая ошибка: {e}")
     finally:
-        logger.info("Модель процесса завершена")
+        logger.info("👋 Модель процесса завершена")
 
 
 if __name__ == "__main__":

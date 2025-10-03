@@ -35,14 +35,14 @@ class SimpleWatchdog:
         self.update_interval = self.config['system_settings'].get('watchdog_update_interval', 5.0)
         self.heartbeat_timeout = self.config['system_settings'].get('controller_heartbeat_timeout', 5.0)
         
-        logger.info(f"Simple Watchdog инициализирован. Интервал: {self.update_interval}с, Timeout: {self.heartbeat_timeout}с")
+        logger.info(f"🐕 Simple Watchdog инициализирован. Интервал: {self.update_interval}с, Timeout: {self.heartbeat_timeout}с")
 
     def _load_config(self) -> Dict[str, Any]:
         """Загрузка конфигурации из JSON файла"""
         try:
             with open(self.config_path, 'r', encoding='utf-8') as f:
                 config = json.load(f)
-                logger.info("✓ Конфигурация загружена")
+                logger.info("📋 Конфигурация загружена")
                 return config
         except Exception as e:
             logger.error(f"❌ Ошибка загрузки конфигурации: {e}")
@@ -53,7 +53,7 @@ class SimpleWatchdog:
         try:
             self.opcua_client = Client(self.server_url)
             self.opcua_client.connect()
-            logger.info("✓ Simple Watchdog подключился к OPC UA серверу")
+            logger.info("🔗 Simple Watchdog подключился к OPC UA серверу")
             return True
         except Exception as e:
             logger.error(f"❌ Ошибка подключения Simple Watchdog к OPC UA серверу: {e}")
@@ -64,9 +64,9 @@ class SimpleWatchdog:
         if self.opcua_client:
             try:
                 self.opcua_client.disconnect()
-                logger.info("Simple Watchdog отключился от OPC UA сервера")
+                logger.info("🔌 Simple Watchdog отключился от OPC UA сервера")
             except Exception as e:
-                logger.error(f"Ошибка отключения от OPC UA сервера: {e}")
+                logger.error(f"❌ Ошибка отключения от OPC UA сервера: {e}")
 
     def get_opcua_variable(self, var_name: str) -> Optional[float]:
         """Получение значения переменной OPC UA"""
@@ -132,9 +132,9 @@ class SimpleWatchdog:
             active_name = "Основной" if active_controller == 1 else "Резервный" if active_controller == 2 else "Неизвестно"
             
             logger.info(f"🔍 Мониторинг контроллеров:")
-            logger.info(f"   Primary: {primary_status} (heartbeat: {primary_heartbeat})")
-            logger.info(f"   Backup:  {backup_status} (heartbeat: {backup_heartbeat})")
-            logger.info(f"   Активный: {active_name} (ID: {active_controller})")
+            logger.info(f"   🎛️ Primary: {primary_status} (heartbeat: {primary_heartbeat})")
+            logger.info(f"   🎛️ Backup:  {backup_status} (heartbeat: {backup_heartbeat})")
+            logger.info(f"   ✅ Активный: {active_name} (ID: {active_controller})")
             
             # Критические ситуации
             if not primary_alive and not backup_alive:

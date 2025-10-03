@@ -21,7 +21,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Копирование исходного кода
 COPY analytics_service.py .
-COPY database_manager.py .
 
 # Смена пользователя
 USER appuser
