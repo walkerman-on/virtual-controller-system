@@ -108,3 +108,5 @@ echo "Ответ: $(echo $RESPONSE | jq -r '.message')"
 
 echo
 echo "✅ Тестирование завершено!"
+
+

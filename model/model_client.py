@@ -113,19 +113,21 @@ class ProcessModelClient:
             logger.error(f"❌ Ошибка получения значения {var_name}: {e}")
             return None
     
-    def _set_variable_value(self, var_name: str, value: float):
+    def _set_variable_value(self, var_name: str, value: float) -> bool:
         """Установка значения переменной на сервере"""
         try:
             node_id = self.node_ids.get(var_name)
             if not node_id:
                 logger.warning(f"⚠️ Node ID для переменной {var_name} не найден")
-                return
+                return False
                 
             node = self.client.get_node(node_id)
             node.set_value(value)
             logger.debug(f"📤 Установлено значение {var_name}: {value}")
+            return True
         except Exception as e:
             logger.error(f"❌ Ошибка установки значения {var_name}: {e}")
+            return False
     
     def _initialize_model(self):
         """Инициализация модели процесса"""
@@ -164,12 +166,36 @@ class ProcessModelClient:
                 logger.warning("⚠️ Не удалось получить значение OP_valve, используем предыдущее")
                 valve_opening = 50.0
             
+            # Проверка корректности полученного значения
+            if valve_opening < 0 or valve_opening > 100:
+                logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Некорректное значение клапана {valve_opening:.1f}%")
+                valve_opening = max(0.0, min(valve_opening, 100.0))
+            
             # Расчет модели
             result = self.model.calculate_step(valve_opening)
             
+            # Проверка результатов расчета
+            if result is None:
+                logger.critical("🚨 КРИТИЧЕСКАЯ ОШИБКА: Модель вернула None результат!")
+                return
+            
+            # Проверка корректности результатов
+            if result['liquid_level'] < 0:
+                logger.critical(f"🚨 КРИТИЧЕСКАЯ ОШИБКА: Отрицательный уровень жидкости {result['liquid_level']:.3f}м!")
+            elif result['liquid_level'] > self.config.get('height', 3.0):
+                logger.critical(f"🚨 КРИТИЧЕСКАЯ ОШИБКА: Уровень жидкости превышает высоту бака!")
+            
+            if result['outlet_flow'] < 0:
+                logger.error(f"❌ ОШИБКА: Отрицательный расход {result['outlet_flow']:.2f} м³/ч")
+            
             # Отправка результатов на сервер
-            self._set_variable_value('PV_level', result['liquid_level'])
-            self._set_variable_value('outlet_flow', result['outlet_flow'])
+            success_pv = self._set_variable_value('PV_level', result['liquid_level'])
+            success_flow = self._set_variable_value('outlet_flow', result['outlet_flow'])
+            
+            if not success_pv:
+                logger.error("❌ ОШИБКА: Не удалось установить PV_level на сервере")
+            if not success_flow:
+                logger.error("❌ ОШИБКА: Не удалось установить outlet_flow на сервере")
             
             # Сохранение данных в базу данных
             if self.db_manager and self.db_manager.sync_connection:
@@ -178,6 +204,12 @@ class ProcessModelClient:
                     sp_level = self._get_variable_value('SP_level') or 2.0
                     inlet_flow = self._get_variable_value('inlet_flow') or 100.0
                     tank_pressure = result.get('tank_pressure', 0)
+                    
+                    # Проверка корректности данных перед сохранением
+                    if sp_level < 0 or sp_level > 5:
+                        logger.warning(f"⚠️ Некорректная уставка уровня {sp_level:.2f}м")
+                    if inlet_flow < 0 or inlet_flow > 1000:
+                        logger.warning(f"⚠️ Некорректный входной поток {inlet_flow:.1f} м³/ч")
                     
                     self.db_manager.save_process_data_sync(
                         pv_level=result['liquid_level'],
@@ -189,7 +221,9 @@ class ProcessModelClient:
                         valve_position=valve_opening
                     )
                 except Exception as e:
-                    logger.debug(f"Ошибка сохранения данных процесса в БД: {e}")
+                    logger.error(f"❌ Ошибка сохранения данных процесса в БД: {e}")
+            else:
+                logger.debug("База данных недоступна для сохранения данных процесса")
             
             # Логирование состояния
             logger.info(f"⏱️ Время: {result['simulation_time']:.1f}с, "
@@ -201,12 +235,33 @@ class ProcessModelClient:
             tank_pressure = result.get('tank_pressure', 0)
             atmospheric_pressure = 101325.0
             total_pressure = atmospheric_pressure + tank_pressure
-            logger.info(f"🔍 Отладка: гидростатическое_давление={tank_pressure:.1f}Па, "
+            logger.debug(f"🔍 Отладка: гидростатическое_давление={tank_pressure:.1f}Па, "
                        f"полное_давление={total_pressure:.1f}Па, "
                        f"плотность={self.config.get('liquid_density', 1000.0)}кг/м³")
             
+            # Проверка на критические состояния процесса
+            level_percentage = (result['liquid_level'] / self.config.get('height', 3.0)) * 100
+            if level_percentage > 95:
+                logger.warning(f"⚠️ КРИТИЧЕСКОЕ СОСТОЯНИЕ: Бак заполнен на {level_percentage:.1f}%!")
+            elif level_percentage < 5:
+                logger.warning(f"⚠️ КРИТИЧЕСКОЕ СОСТОЯНИЕ: Бак заполнен на {level_percentage:.1f}%!")
+            
+            # Проверка стабильности процесса
+            inlet_flow = self._get_variable_value('inlet_flow') or 100.0
+            flow_difference = abs(result['outlet_flow'] - inlet_flow)
+            if flow_difference > 50:  # Разница больше 50 м³/ч
+                logger.warning(f"⚠️ НЕСТАБИЛЬНОСТЬ: Разница потоков {flow_difference:.1f} м³/ч")
+            
         except Exception as e:
-            logger.error(f"❌ Ошибка выполнения шага симуляции: {e}")
+            logger.error(f"❌ Критическая ошибка выполнения шага симуляции: {e}")
+            # Попытка восстановления
+            try:
+                logger.info("🔄 Попытка восстановления состояния модели...")
+                if self.model:
+                    self.model.reset()
+                    logger.info("✅ Модель сброшена к начальному состоянию")
+            except Exception as recovery_error:
+                logger.critical(f"🚨 КРИТИЧЕСКАЯ ОШИБКА: Не удалось восстановить модель: {recovery_error}")
     
     def start_simulation(self):
         """Запуск симуляции модели"""

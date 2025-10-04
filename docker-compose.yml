@@ -83,6 +83,7 @@ services:
       - DB_NAME=digital_twin_db
       - DB_USER=process_user
       - DB_PASSWORD=process_password
+      - TELEGRAM_BOT_TOKEN=8499179904:AAGfcyftDeJlFjw5VVom5UvljFHDhYidCEw
     networks:
       - process-network
     restart: unless-stopped
@@ -115,6 +116,7 @@ services:
       - DB_NAME=digital_twin_db
       - DB_USER=process_user
       - DB_PASSWORD=process_password
+      - TELEGRAM_BOT_TOKEN=8499179904:AAGfcyftDeJlFjw5VVom5UvljFHDhYidCEw
     networks:
       - process-network
     restart: unless-stopped
@@ -162,18 +164,48 @@ services:
     volumes:
       - ./database/database_manager.py:/app/database_manager.py
     environment:
-      - DB_HOST=database
-      - DB_PORT=5432
-      - DB_NAME=digital_twin_db
-      - DB_USER=process_user
-      - DB_PASSWORD=process_password
-      - ANALYTICS_PORT=8080
-      - ANALYTICS_HOST=0.0.0.0
+      - DB_HOST=${DB_HOST:-database}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_NAME=${DB_NAME:-digital_twin_db}
+      - DB_USER=${DB_USER:-process_user}
+      - DB_PASSWORD=${DB_PASSWORD:-process_password}
+      - ANALYTICS_PORT=${ANALYTICS_PORT:-8080}
+      - ANALYTICS_HOST=${ANALYTICS_HOST:-0.0.0.0}
     networks:
       - process-network
     restart: unless-stopped
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  telegram-bot:
+    build: ./telegram
+    container_name: telegram-notification-bot
+    depends_on:
+      database:
+        condition: service_healthy
+    volumes:
+      - ./telegram/data:/app/data
+      - ./config.json:/app/config.json
+    environment:
+      - TELEGRAM_BOT_TOKEN=8499179904:AAGfcyftDeJlFjw5VVom5UvljFHDhYidCEw
+      - ADMIN_CHAT_ID=${ADMIN_CHAT_ID:-}
+      - DB_HOST=${DB_HOST:-database}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_NAME=${DB_NAME:-digital_twin_db}
+      - DB_USER=${DB_USER:-process_user}
+      - DB_PASSWORD=${DB_PASSWORD:-process_password}
+      - LOGGING_LEVEL=${LOGGING_LEVEL:-INFO}
+      - DEBUG_MODE=${DEBUG_MODE:-false}
+      - HEALTH_CHECK_INTERVAL=${HEALTH_CHECK_INTERVAL:-30.0}
+    networks:
+      - process-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import os; exit(0 if os.getenv('TELEGRAM_BOT_TOKEN') else 1)" ]
       interval: 30s
       timeout: 10s
       retries: 3
