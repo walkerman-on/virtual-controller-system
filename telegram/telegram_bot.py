@@ -8,14 +8,31 @@ import logging
 import os
 import sys
 from typing import Dict, List, Optional, Set
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 
 import aiohttp
 from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.error import TelegramError
 
+# Добавляем путь к модулям базы данных
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'database'))
+from database_manager import get_db_manager
+
+# Добавляем импорт OPC UA клиента
+try:
+    from opcua import Client
+    OPCUA_AVAILABLE = True
+except ImportError:
+    OPCUA_AVAILABLE = False
+    print("⚠️ OPC UA модуль недоступен")
+
 logger = logging.getLogger(__name__)
+
+def get_moscow_time():
+    """Получение текущего времени по МСК (UTC+3)"""
+    moscow_tz = timezone(timedelta(hours=3))
+    return datetime.now(moscow_tz)
 
 
 class TelegramNotifier:
@@ -45,8 +62,10 @@ class TelegramNotifier:
     def _load_subscribers(self):
         """Загрузка списка подписчиков из файла"""
         try:
-            if os.path.exists('telegram_subscribers.json'):
-                with open('telegram_subscribers.json', 'r', encoding='utf-8') as f:
+            # Загружаем из папки data для синхронизации с watchdog
+            subscribers_file = '/app/data/telegram_subscribers.json'
+            if os.path.exists(subscribers_file):
+                with open(subscribers_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     self.subscribers = set(data.get('subscribers', []))
                     self.notification_filters = data.get('filters', {})
@@ -61,7 +80,9 @@ class TelegramNotifier:
                 'subscribers': list(self.subscribers),
                 'filters': self.notification_filters
             }
-            with open('telegram_subscribers.json', 'w', encoding='utf-8') as f:
+            # Сохраняем в папку data для синхронизации с watchdog
+            os.makedirs('/app/data', exist_ok=True)
+            with open('/app/data/telegram_subscribers.json', 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения подписчиков: {e}")
@@ -161,16 +182,18 @@ class TelegramNotifier:
         }
         
         emoji = emoji_map.get(level, '📢')
-        timestamp = datetime.now().strftime('%H:%M:%S')
+        # Используем московское время (UTC+3)
+        moscow_tz = timezone(timedelta(hours=3))
+        timestamp = get_moscow_time().strftime('%H:%M:%S')
         
         # Основное сообщение
-        text = f"{emoji} *{level}* [{timestamp}]\n"
-        text += f"🔧 *Компонент:* {component}\n"
-        text += f"📝 *Сообщение:* {message}\n"
+        text = f"{emoji} {level} [{timestamp}]\n"
+        text += f"🔧 Компонент: {component}\n"
+        text += f"📝 Сообщение: {message}\n"
         
         # Добавление дополнительных данных
         if additional_data:
-            text += "\n📊 *Дополнительные данные:*\n"
+            text += "\n📊 Дополнительные данные:\n"
             for key, value in additional_data.items():
                 text += f"• {key}: {value}\n"
         
@@ -189,7 +212,6 @@ class TelegramNotifier:
             await self.bot.send_message(
                 chat_id=chat_id,
                 text=text,
-                parse_mode='Markdown',
                 disable_web_page_preview=True
             )
             logger.debug(f"📤 Уведомление отправлено в {chat_id}")
@@ -232,7 +254,7 @@ class TelegramNotifier:
             text = "📊 *Отчет о состоянии системы*\n\n"
             text += f"🤖 *Бот активен:* {'✅' if self.enabled else '❌'}\n"
             text += f"👥 *Подписчиков:* {len(self.subscribers)}\n"
-            text += f"⏰ *Время:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            text += f"⏰ *Время:* {get_moscow_time().strftime('%Y-%m-%d %H:%M:%S')}\n"
             
             await self.bot.send_message(
                 chat_id=chat_id,
@@ -249,23 +271,155 @@ class TelegramBotHandler:
     def __init__(self, notifier: TelegramNotifier):
         self.notifier = notifier
         self.application = None
+        
+        # Инициализация подключений к данным
+        self.db_manager = get_db_manager()
+        self.opcua_client = None
+        self.config = self._load_config()
+        
+        # Node IDs для OPC UA переменных
+        self.node_ids = {}
+        self._setup_node_ids()
+        
+        # Кэш для данных с временными метками
+        self.data_cache = {}
+        self.cache_timeout = 5.0  # 5 секунд
+        
+    def _load_config(self) -> Dict:
+        """Загрузка конфигурации"""
+        try:
+            # Пробуем разные пути для config.json
+            config_paths = [
+                '/app/config.json',  # Путь в Docker контейнере
+                os.path.join(os.path.dirname(__file__), '..', 'config.json'),  # Относительный путь
+                'config.json'  # Текущая директория
+            ]
+            
+            config = {}
+            for config_path in config_paths:
+                try:
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        config = json.load(f)
+                    logger.info(f"📋 Конфигурация Telegram бота загружена из {config_path}")
+                    break
+                except FileNotFoundError:
+                    continue
+            
+            if not config:
+                logger.warning("⚠️ Конфигурация не найдена, используются значения по умолчанию")
+                # Возвращаем базовую конфигурацию
+                config = {
+                    'opcua_variables': {
+                        'process_variables': {
+                            'PV_level': 'ns=2;i=2',
+                            'SP_level': 'ns=2;i=3', 
+                            'OP_valve': 'ns=2;i=4',
+                            'outlet_flow': 'ns=2;i=5',
+                            'inlet_flow': 'ns=2;i=6'
+                        }
+                    }
+                }
+            
+            return config
+        except Exception as e:
+            logger.error(f"❌ Ошибка загрузки конфигурации: {e}")
+            return {}
+    
+    def _setup_node_ids(self):
+        """Настройка Node IDs для OPC UA переменных"""
+        try:
+            if 'opcua_variables' in self.config:
+                pv_config = self.config['opcua_variables']['process_variables']
+                for var_name, var_config in pv_config.items():
+                    self.node_ids[var_name] = var_config['node_id']
+                logger.info("🔗 Node IDs для Telegram бота настроены")
+        except Exception as e:
+            logger.error(f"❌ Ошибка настройки Node IDs: {e}")
+    
+    async def _connect_to_opcua(self) -> bool:
+        """Подключение к OPC UA серверу"""
+        if not OPCUA_AVAILABLE:
+            logger.warning("⚠️ OPC UA модуль недоступен")
+            return False
+            
+        try:
+            server_url = os.getenv('OPCUA_SERVER_URL', 'opc.tcp://opcua-server:4840/freeopcua/server/')
+            self.opcua_client = Client(server_url)
+            self.opcua_client.connect()
+            logger.info(f"🔗 Telegram бот подключился к OPC UA серверу: {server_url}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Ошибка подключения Telegram бота к OPC UA: {e}")
+            return False
+    
+    async def _disconnect_from_opcua(self):
+        """Отключение от OPC UA сервера"""
+        if self.opcua_client:
+            try:
+                self.opcua_client.disconnect()
+                logger.info("🔌 Telegram бот отключился от OPC UA сервера")
+            except Exception as e:
+                logger.error(f"❌ Ошибка отключения от OPC UA: {e}")
+    
+    async def _get_opcua_value(self, var_name: str) -> Optional[float]:
+        """Получение значения переменной с OPC UA сервера"""
+        if not self.opcua_client or var_name not in self.node_ids:
+            return None
+            
+        try:
+            node_id = self.node_ids[var_name]
+            node = self.opcua_client.get_node(node_id)
+            value = node.get_value()
+            return value
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения OPC UA значения {var_name}: {e}")
+            return None
+    
+    def _is_cache_valid(self, cache_key: str) -> bool:
+        """Проверка валидности кэша"""
+        if cache_key not in self.data_cache:
+            return False
+        
+        cache_time = self.data_cache[cache_key].get('timestamp', 0)
+        return (datetime.now().timestamp() - cache_time) < self.cache_timeout
+    
+    def _update_cache(self, cache_key: str, data: Dict):
+        """Обновление кэша данных"""
+        self.data_cache[cache_key] = {
+            'data': data,
+            'timestamp': datetime.now().timestamp()
+        }
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
         chat_id = str(update.effective_chat.id)
+        user_name = update.effective_user.first_name or "Пользователь"
         
-        text = """
-🤖 *Добро пожаловать в систему мониторинга!*
+        # Автоматически подписываем пользователя на уведомления
+        self.notifier.add_subscriber(chat_id)
+        
+        text = f"""🤖 *Добро пожаловать, {user_name}!*
 
-Доступные команды:
+✅ *Вы автоматически подписаны на уведомления о критических событиях*
+
+📋 *Доступные команды:*
 /start - Начать работу
 /subscribe - Подписаться на уведомления
 /unsubscribe - Отписаться от уведомлений
 /status - Статус системы
+/tank - Состояние резервуара
+/valve - Состояние клапана
+/pid - Параметры PID контроллера
+/controllers - Статус контроллеров
+/myid - Получить ваш Chat ID
 /filters - Настройка фильтров
 /help - Помощь
 
-Для получения уведомлений используйте /subscribe
+🚨 *Автоматические уведомления:*
+Вы будете получать уведомления о:
+• Отключении контроллеров
+• Критических ошибках системы
+• Предупреждениях о состоянии оборудования
         """
         
         await update.message.reply_text(text, parse_mode='Markdown')
@@ -287,6 +441,20 @@ class TelegramBotHandler:
         
         await update.message.reply_text(text)
     
+    async def myid_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Команда для получения chat_id пользователя"""
+        chat_id = str(update.effective_chat.id)
+        user_name = update.effective_user.first_name or "Пользователь"
+        
+        message = f"🆔 **Ваш Chat ID:** `{chat_id}`\n"
+        message += f"👤 **Имя:** {user_name}\n\n"
+        message += "📝 **Для настройки автоматических уведомлений:**\n"
+        message += f"1. Скопируйте ваш Chat ID: `{chat_id}`\n"
+        message += "2. Замените `123456789` на ваш Chat ID в docker-compose.yml\n"
+        message += "3. Перезапустите watchdog: `docker-compose restart watchdog`"
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+
     async def unsubscribe_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /unsubscribe"""
         chat_id = str(update.effective_chat.id)
@@ -485,7 +653,7 @@ CRITICAL - Критические ошибки
 • Максимальный уровень: 5.0 м
 • Нормальный диапазон: 1.0 - 4.0 м
 
-⏰ *Время обновления:* {datetime.now().strftime('%H:%M:%S')}
+⏰ *Время обновления:* {tank_data.get('last_update', 'N/A')}
             """
             
             await update.message.reply_text(text, parse_mode='Markdown')
@@ -530,7 +698,7 @@ CRITICAL - Критические ошибки
 • Максимальное открытие: 100%
 • Нормальный диапазон: 25% - 75%
 
-⏰ *Время обновления:* {datetime.now().strftime('%H:%M:%S')}
+⏰ *Время обновления:* {valve_data.get('last_update', 'N/A')}
             """
             
             await update.message.reply_text(text, parse_mode='Markdown')
@@ -575,7 +743,7 @@ CRITICAL - Критические ошибки
 • Интегральная: {pid_data.get('integral', 'N/A')}
 • Дифференциальная: {pid_data.get('derivative', 'N/A')}
 
-⏰ *Время обновления:* {datetime.now().strftime('%H:%M:%S')}
+⏰ *Время обновления:* {pid_data.get('last_update', 'N/A')}
             """
             
             await update.message.reply_text(text, parse_mode='Markdown')
@@ -614,7 +782,7 @@ CRITICAL - Критические ошибки
 • Успешных запросов: {opcua_data.get('successful_requests', 0)}
 • Ошибок: {opcua_data.get('errors', 0)}
 
-⏰ *Время проверки:* {datetime.now().strftime('%H:%M:%S')}
+⏰ *Время проверки:* {get_moscow_time().strftime('%H:%M:%S')}
             """
             
             await update.message.reply_text(text, parse_mode='Markdown')
@@ -654,7 +822,7 @@ CRITICAL - Критические ошибки
 • Активные соединения: {db_data.get('connections', 0)}
 • Записей в таблице: {db_data.get('records_count', 0)}
 
-⏰ *Время проверки:* {datetime.now().strftime('%H:%M:%S')}
+⏰ *Время проверки:* {get_moscow_time().strftime('%H:%M:%S')}
             """
             
             await update.message.reply_text(text, parse_mode='Markdown')
@@ -693,7 +861,7 @@ CRITICAL - Критические ошибки
 • Активных сессий: {analytics_data.get('active_sessions', 0)}
 • Обработано данных: {analytics_data.get('processed_data', 0)}
 
-⏰ *Время проверки:* {datetime.now().strftime('%H:%M:%S')}
+⏰ *Время проверки:* {get_moscow_time().strftime('%H:%M:%S')}
             """
             
             await update.message.reply_text(text, parse_mode='Markdown')
@@ -732,7 +900,7 @@ CRITICAL - Критические ошибки
 • Автоматический failover: {controllers_data.get('failover_enabled', 'N/A')}
 • Время переключения: {controllers_data.get('failover_time', 'N/A')}
 
-⏰ *Время проверки:* {datetime.now().strftime('%H:%M:%S')}
+⏰ *Время проверки:* {get_moscow_time().strftime('%H:%M:%S')}
             """
             
             await update.message.reply_text(text, parse_mode='Markdown')
@@ -775,7 +943,7 @@ CRITICAL - Критические ошибки
 • Критические ошибки: {system_data.get('critical_errors', 0)}
 • Всего событий: {system_data.get('total_events', 0)}
 
-⏰ *Время проверки:* {datetime.now().strftime('%H:%M:%S')}
+⏰ *Время проверки:* {get_moscow_time().strftime('%H:%M:%S')}
             """
             
             await update.message.reply_text(text, parse_mode='Markdown')
@@ -822,7 +990,7 @@ CRITICAL - Критические ошибки
             if alerts_count > 5:
                 text += f"\n... и еще {alerts_count - 5} предупреждений"
             
-            text += f"\n⏰ *Время проверки:* {datetime.now().strftime('%H:%M:%S')}"
+            text += f"\n⏰ *Время проверки:* {get_moscow_time().strftime('%H:%M:%S')}"
             
             await update.message.reply_text(text, parse_mode='Markdown')
             
@@ -861,7 +1029,7 @@ CRITICAL - Критические ошибки
             if events_count > 5:
                 text += f"\n... и еще {events_count - 5} событий"
             
-            text += f"\n⏰ *Время проверки:* {datetime.now().strftime('%H:%M:%S')}"
+            text += f"\n⏰ *Время проверки:* {get_moscow_time().strftime('%H:%M:%S')}"
             
             await update.message.reply_text(text, parse_mode='Markdown')
             
@@ -900,7 +1068,7 @@ CRITICAL - Критические ошибки
             if logs_count > 5:
                 text += f"\n... и еще {logs_count - 5} записей"
             
-            text += f"\n⏰ *Время проверки:* {datetime.now().strftime('%H:%M:%S')}"
+            text += f"\n⏰ *Время проверки:* {get_moscow_time().strftime('%H:%M:%S')}"
             
             await update.message.reply_text(text, parse_mode='Markdown')
             
@@ -909,50 +1077,216 @@ CRITICAL - Критические ошибки
     
     # Вспомогательные методы для получения данных
     async def _get_tank_data(self) -> Dict:
-        """Получение данных резервуара"""
+        """Получение данных резервуара из базы данных и OPC UA"""
+        cache_key = 'tank_data'
+        
+        # Проверяем кэш
+        if self._is_cache_valid(cache_key):
+            logger.debug("📋 Используем кэшированные данные резервуара")
+            return self.data_cache[cache_key]['data']
+        
+        logger.info("🔄 Получение свежих данных резервуара...")
+        
         try:
-            # Здесь можно добавить реальные запросы к API или базе данных
-            # Пока возвращаем тестовые данные
-            return {
-                'level': 2.5,
-                'volume': 12.5,
-                'mass': 12500,
-                'pressure': 101325
+            # Подключаемся к OPC UA если не подключены
+            if not self.opcua_client:
+                logger.info("🔌 Подключение к OPC UA серверу...")
+                await self._connect_to_opcua()
+            
+            # Получаем данные из OPC UA
+            logger.debug("📡 Получение данных из OPC UA...")
+            pv_level = await self._get_opcua_value('PV_level')
+            inlet_flow = await self._get_opcua_value('inlet_flow')
+            
+            logger.debug(f"📊 OPC UA данные: PV_level={pv_level}, inlet_flow={inlet_flow}")
+            
+            # Получаем последние данные из базы данных
+            db_data = {}
+            if self.db_manager and self.db_manager.async_pool:
+                try:
+                    logger.debug("🗄️ Получение данных из базы данных...")
+                    async with self.db_manager.async_pool.acquire() as conn:
+                        query = """
+                        SELECT pv_level, inlet_flow, tank_pressure, timestamp
+                        FROM process_data.process_variables 
+                        ORDER BY timestamp DESC 
+                        LIMIT 1
+                        """
+                        row = await conn.fetchrow(query)
+                        if row:
+                            db_data = dict(row)
+                            logger.debug(f"📊 БД данные: {db_data}")
+                        else:
+                            logger.warning("⚠️ Нет данных в базе данных")
+                except Exception as e:
+                    logger.error(f"❌ Ошибка получения данных резервуара из БД: {e}")
+            else:
+                logger.warning("⚠️ База данных недоступна")
+            
+            # Формируем результат
+            result = {
+                'level': pv_level if pv_level is not None else db_data.get('pv_level', 0),
+                'volume': (pv_level if pv_level is not None else db_data.get('pv_level', 0)) * 5.0,  # Примерный расчет
+                'mass': (pv_level if pv_level is not None else db_data.get('pv_level', 0)) * 5.0 * 1000,  # Примерный расчет
+                'pressure': db_data.get('tank_pressure', 101325),
+                'last_update': get_moscow_time().strftime('%H:%M:%S')  # Текущее время запроса
             }
+            
+            logger.info(f"✅ Данные резервуара получены: уровень={result['level']:.3f}м, время={result['last_update']}")
+            
+            # Обновляем кэш
+            self._update_cache(cache_key, result)
+            return result
+            
         except Exception as e:
-            logger.error(f"Ошибка получения данных резервуара: {e}")
-            return {}
+            logger.error(f"❌ Ошибка получения данных резервуара: {e}")
+            # Возвращаем данные из кэша или значения по умолчанию
+            if cache_key in self.data_cache:
+                logger.info("📋 Возвращаем данные из кэша")
+                return self.data_cache[cache_key]['data']
+            logger.warning("⚠️ Возвращаем значения по умолчанию")
+            return {
+                'level': 0,
+                'volume': 0,
+                'mass': 0,
+                'pressure': 101325,
+                'last_update': 'N/A'
+            }
     
     async def _get_valve_data(self) -> Dict:
-        """Получение данных клапана"""
+        """Получение данных клапана из базы данных и OPC UA"""
+        cache_key = 'valve_data'
+        
+        # Проверяем кэш
+        if self._is_cache_valid(cache_key):
+            return self.data_cache[cache_key]['data']
+        
         try:
-            return {
-                'opening': 45.0,
-                'flow_rate': 0.025,
-                'change_rate': 2.5
+            # Подключаемся к OPC UA если не подключены
+            if not self.opcua_client:
+                await self._connect_to_opcua()
+            
+            # Получаем данные из OPC UA
+            op_valve = await self._get_opcua_value('OP_valve')
+            outlet_flow = await self._get_opcua_value('outlet_flow')
+            
+            # Получаем последние данные из базы данных
+            db_data = {}
+            if self.db_manager and self.db_manager.async_pool:
+                try:
+                    async with self.db_manager.async_pool.acquire() as conn:
+                        query = """
+                        SELECT op_valve, outlet_flow, timestamp
+                        FROM process_data.process_variables 
+                        ORDER BY timestamp DESC 
+                        LIMIT 1
+                        """
+                        row = await conn.fetchrow(query)
+                        if row:
+                            db_data = dict(row)
+                except Exception as e:
+                    logger.error(f"❌ Ошибка получения данных клапана из БД: {e}")
+            
+            # Формируем результат
+            result = {
+                'opening': op_valve if op_valve is not None else db_data.get('op_valve', 0),
+                'flow_rate': outlet_flow if outlet_flow is not None else db_data.get('outlet_flow', 0),
+                'change_rate': 0,  # Можно рассчитать из истории
+                'last_update': get_moscow_time().strftime('%H:%M:%S')  # Текущее время запроса
             }
+            
+            # Обновляем кэш
+            self._update_cache(cache_key, result)
+            return result
+            
         except Exception as e:
-            logger.error(f"Ошибка получения данных клапана: {e}")
-            return {}
+            logger.error(f"❌ Ошибка получения данных клапана: {e}")
+            # Возвращаем данные из кэша или значения по умолчанию
+            if cache_key in self.data_cache:
+                return self.data_cache[cache_key]['data']
+            return {
+                'opening': 0,
+                'flow_rate': 0,
+                'change_rate': 0,
+                'last_update': 'N/A'
+            }
     
     async def _get_pid_data(self) -> Dict:
-        """Получение данных PID контроллера"""
+        """Получение данных PID контроллера из базы данных и OPC UA"""
+        cache_key = 'pid_data'
+        
+        # Проверяем кэш
+        if self._is_cache_valid(cache_key):
+            return self.data_cache[cache_key]['data']
+        
         try:
+            # Подключаемся к OPC UA если не подключены
+            if not self.opcua_client:
+                await self._connect_to_opcua()
+            
+            # Получаем данные из OPC UA
+            sp_level = await self._get_opcua_value('SP_level')
+            pv_level = await self._get_opcua_value('PV_level')
+            op_valve = await self._get_opcua_value('OP_valve')
+            
+            # Получаем последние данные PID из базы данных
+            db_data = {}
+            if self.db_manager and self.db_manager.async_pool:
+                try:
+                    async with self.db_manager.async_pool.acquire() as conn:
+                        query = """
+                        SELECT setpoint, process_value, output, error_value, 
+                               kp, ki, kd, integral, previous_error, timestamp
+                        FROM controller_data.pid_states 
+                        ORDER BY timestamp DESC 
+                        LIMIT 1
+                        """
+                        row = await conn.fetchrow(query)
+                        if row:
+                            db_data = dict(row)
+                except Exception as e:
+                    logger.error(f"❌ Ошибка получения данных PID из БД: {e}")
+            
+            # Рассчитываем ошибку
+            error = (pv_level if pv_level is not None else db_data.get('process_value', 0)) - (sp_level if sp_level is not None else db_data.get('setpoint', 0))
+            
+            # Формируем результат
+            result = {
+                'setpoint': sp_level if sp_level is not None else db_data.get('setpoint', 0),
+                'process_value': pv_level if pv_level is not None else db_data.get('process_value', 0),
+                'error': error,
+                'output': op_valve if op_valve is not None else db_data.get('output', 0),
+                'kp': db_data.get('kp', 1.0),
+                'ki': db_data.get('ki', 0.1),
+                'kd': db_data.get('kd', 0.05),
+                'proportional': error * db_data.get('kp', 1.0),
+                'integral': db_data.get('integral', 0),
+                'derivative': db_data.get('previous_error', 0),
+                'last_update': get_moscow_time().strftime('%H:%M:%S')  # Текущее время запроса
+            }
+            
+            # Обновляем кэш
+            self._update_cache(cache_key, result)
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения данных PID: {e}")
+            # Возвращаем данные из кэша или значения по умолчанию
+            if cache_key in self.data_cache:
+                return self.data_cache[cache_key]['data']
             return {
-                'setpoint': 3.0,
-                'process_value': 2.5,
-                'error': 0.5,
-                'output': 45.0,
+                'setpoint': 0,
+                'process_value': 0,
+                'error': 0,
+                'output': 0,
                 'kp': 1.0,
                 'ki': 0.1,
                 'kd': 0.05,
-                'proportional': 0.5,
-                'integral': 0.1,
-                'derivative': 0.05
+                'proportional': 0,
+                'integral': 0,
+                'derivative': 0,
+                'last_update': 'N/A'
             }
-        except Exception as e:
-            logger.error(f"Ошибка получения данных PID: {e}")
-            return {}
     
     async def _get_opcua_data(self) -> Dict:
         """Получение данных OPC UA сервера"""
@@ -1004,25 +1338,92 @@ CRITICAL - Критические ошибки
             return {}
     
     async def _get_controllers_data(self) -> Dict:
-        """Получение данных контроллеров"""
+        """Получение данных контроллеров из OPC UA"""
+        cache_key = 'controllers_data'
+        
+        # Проверяем кэш
+        if self._is_cache_valid(cache_key):
+            return self.data_cache[cache_key]['data']
+        
         try:
-            return {
+            # Подключаемся к OPC UA если не подключены
+            if not self.opcua_client:
+                await self._connect_to_opcua()
+            
+            # Получаем данные из OPC UA
+            primary_heartbeat = await self._get_opcua_value('primary_controller_heartbeat')
+            backup_heartbeat = await self._get_opcua_value('backup_controller_heartbeat')
+            active_controller = await self._get_opcua_value('active_controller')
+            
+            logger.debug(f"📊 OPC UA данные контроллеров: primary_heartbeat={primary_heartbeat}, backup_heartbeat={backup_heartbeat}, active_controller={active_controller}")
+            
+            # Определяем статус контроллеров на основе текущего времени
+            import time
+            current_time = time.time()
+            primary_alive = (current_time - primary_heartbeat) < 5.0 if primary_heartbeat else False
+            backup_alive = (current_time - backup_heartbeat) < 5.0 if backup_heartbeat else False
+            
+            logger.info(f"🔍 Статус контроллеров: primary_alive={primary_alive}, backup_alive={backup_alive}, active_controller={active_controller}")
+            
+            # Определяем статус контроллеров
+            if active_controller == 1:
+                primary_status = 'active' if primary_alive else 'offline'
+                backup_status = 'standby' if backup_alive else 'offline'
+            elif active_controller == 2:
+                primary_status = 'offline' if not primary_alive else 'standby'
+                backup_status = 'active' if backup_alive else 'offline'
+            else:
+                primary_status = 'offline' if not primary_alive else 'standby'
+                backup_status = 'offline' if not backup_alive else 'standby'
+            
+            # Форматируем время heartbeat
+            primary_heartbeat_time = datetime.fromtimestamp(primary_heartbeat).strftime('%H:%M:%S') if primary_heartbeat else 'N/A'
+            backup_heartbeat_time = datetime.fromtimestamp(backup_heartbeat).strftime('%H:%M:%S') if backup_heartbeat else 'N/A'
+            
+            result = {
                 'primary': {
-                    'status': 'active',
-                    'uptime': '2h 15m',
-                    'last_heartbeat': '19:04:30'
+                    'status': primary_status,
+                    'uptime': '2h 15m',  # Можно рассчитать из БД
+                    'last_heartbeat': primary_heartbeat_time
                 },
                 'backup': {
-                    'status': 'standby',
-                    'uptime': '2h 15m',
-                    'last_heartbeat': '19:04:25'
+                    'status': backup_status,
+                    'uptime': '2h 15m',  # Можно рассчитать из БД
+                    'last_heartbeat': backup_heartbeat_time
                 },
                 'failover_enabled': True,
-                'failover_time': '2.5s'
+                'failover_time': '2.5s',
+                'active_controller': 'primary' if active_controller == 1 else 'backup' if active_controller == 2 else 'unknown',
+                'last_update': get_moscow_time().strftime('%H:%M:%S')
             }
+            
+            logger.info(f"✅ Данные контроллеров получены: primary={primary_status}, backup={backup_status}, active={result['active_controller']}")
+            
+            # Обновляем кэш
+            self._update_cache(cache_key, result)
+            return result
+            
         except Exception as e:
-            logger.error(f"Ошибка получения данных контроллеров: {e}")
-            return {}
+            logger.error(f"❌ Ошибка получения данных контроллеров: {e}")
+            # Возвращаем данные из кэша или значения по умолчанию
+            if cache_key in self.data_cache:
+                return self.data_cache[cache_key]['data']
+            return {
+                'primary': {
+                    'status': 'unknown',
+                    'uptime': 'N/A',
+                    'last_heartbeat': 'N/A'
+                },
+                'backup': {
+                    'status': 'unknown',
+                    'uptime': 'N/A',
+                    'last_heartbeat': 'N/A'
+                },
+                'failover_enabled': False,
+                'failover_time': 'N/A',
+                'active_controller': 'unknown',
+                'last_update': 'N/A'
+            }
     
     async def _get_system_data(self) -> Dict:
         """Получение общих данных системы"""
@@ -1125,6 +1526,7 @@ CRITICAL - Критические ошибки
         application.add_handler(CommandHandler("start", self.start_command))
         application.add_handler(CommandHandler("subscribe", self.subscribe_command))
         application.add_handler(CommandHandler("unsubscribe", self.unsubscribe_command))
+        application.add_handler(CommandHandler("myid", self.myid_command))
         application.add_handler(CommandHandler("status", self.status_command))
         application.add_handler(CommandHandler("help", self.help_command))
         
@@ -1173,6 +1575,16 @@ def start_telegram_bot_sync(bot_token: str, admin_chat_id: Optional[str] = None)
     notifier = init_telegram_bot(bot_token, admin_chat_id)
     bot_handler = TelegramBotHandler(notifier)
     
+    # Инициализация базы данных
+    try:
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(bot_handler.db_manager.init_async_pool(min_size=2, max_size=5))
+        logger.info("✅ Telegram бот подключен к базе данных")
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось подключиться к базе данных: {e}")
+    
     # Создание приложения
     application = Application.builder().token(bot_token).build()
     bot_handler.setup_handlers(application)
@@ -1183,12 +1595,25 @@ def start_telegram_bot_sync(bot_token: str, admin_chat_id: Optional[str] = None)
         application.run_polling()
     except Exception as e:
         logger.error(f"❌ Ошибка в Telegram боте: {e}")
+    finally:
+        # Отключение от OPC UA при завершении
+        try:
+            loop.run_until_complete(bot_handler._disconnect_from_opcua())
+        except:
+            pass
 
 
 async def start_telegram_bot(bot_token: str, admin_chat_id: Optional[str] = None):
     """Запуск Telegram бота"""
     notifier = init_telegram_bot(bot_token, admin_chat_id)
     bot_handler = TelegramBotHandler(notifier)
+    
+    # Инициализация базы данных
+    try:
+        await bot_handler.db_manager.init_async_pool(min_size=2, max_size=5)
+        logger.info("✅ Telegram бот подключен к базе данных")
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось подключиться к базе данных: {e}")
     
     # Создание приложения
     application = Application.builder().token(bot_token).build()
@@ -1200,6 +1625,9 @@ async def start_telegram_bot(bot_token: str, admin_chat_id: Optional[str] = None
         await application.run_polling(stop_signals=None)
     except Exception as e:
         logger.error(f"❌ Ошибка в Telegram боте: {e}")
+    finally:
+        # Отключение от OPC UA при завершении
+        await bot_handler._disconnect_from_opcua()
 
 
 if __name__ == "__main__":

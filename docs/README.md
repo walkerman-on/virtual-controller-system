@@ -80,7 +80,7 @@ client.disconnect()
                                  │
                                  ▼
                         ┌─────────────────┐
-                        │    Watchdog      │
+                        │    Watchdog     │
                         │                 │
                         │  - Monitoring   │
                         │  - Health Check │

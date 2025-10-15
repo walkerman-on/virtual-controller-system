@@ -53,6 +53,8 @@ services:
     volumes:
       - ./config.json:/app/config.json
       - ./database/database_manager.py:/app/database_manager.py
+      - ./telegram:/app/telegram
+      - telegram_data:/app/data
     environment:
       - OPCUA_SERVER_URL=opc.tcp://opcua-server:4840/freeopcua/server/
       - DB_HOST=database
@@ -60,6 +62,7 @@ services:
       - DB_NAME=digital_twin_db
       - DB_USER=process_user
       - DB_PASSWORD=process_password
+      - TELEGRAM_BOT_TOKEN=8499179904:AAGfcyftDeJlFjw5VVom5UvljFHDhYidCEw
     networks:
       - process-network
     restart: unless-stopped
@@ -127,9 +130,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
-  watchdog:
-    build: ./watchdog
-    container_name: controller-watchdog
+  controller-watchdog-service:
+    build: ./controller-watchdog-service
+    container_name: controller-watchdog-service
     depends_on:
       database:
         condition: service_healthy
@@ -141,17 +144,32 @@ services:
         condition: service_started
     volumes:
       - ./config.json:/app/config.json
-      - ./database/database_manager.py:/app/database_manager.py
+      - ./telegram:/app/telegram
+      - telegram_data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - OPCUA_SERVER_URL=opc.tcp://opcua-server:4840/freeopcua/server/
-      - DB_HOST=database
-      - DB_PORT=5432
-      - DB_NAME=digital_twin_db
-      - DB_USER=process_user
-      - DB_PASSWORD=process_password
+      - TELEGRAM_BOT_TOKEN=8499179904:AAGfcyftDeJlFjw5VVom5UvljFHDhYidCEw
     networks:
       - process-network
     restart: unless-stopped
+    user: "0:0" # Запуск от root для доступа к Docker socket
+
+  watchdog-system-service:
+    build: ./watchdog-system-service
+    container_name: watchdog-system-service
+    depends_on:
+      - controller-watchdog-service
+    volumes:
+      - ./telegram:/app/telegram
+      - telegram_data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - TELEGRAM_BOT_TOKEN=8499179904:AAGfcyftDeJlFjw5VVom5UvljFHDhYidCEw
+    networks:
+      - process-network
+    restart: unless-stopped
+    user: "0:0" # Запуск от root для доступа к Docker socket
 
   analytics:
     build: ./analytics
@@ -188,8 +206,9 @@ services:
       database:
         condition: service_healthy
     volumes:
-      - ./telegram/data:/app/data
+      - telegram_data:/app/data
       - ./config.json:/app/config.json
+      - ./database/database_manager.py:/app/database_manager.py
     environment:
       - TELEGRAM_BOT_TOKEN=8499179904:AAGfcyftDeJlFjw5VVom5UvljFHDhYidCEw
       - ADMIN_CHAT_ID=${ADMIN_CHAT_ID:-}
@@ -217,4 +236,6 @@ networks:
 
 volumes:
   postgres_data:
+    driver: local
+  telegram_data:
     driver: local

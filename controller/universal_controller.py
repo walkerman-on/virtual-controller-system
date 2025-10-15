@@ -499,7 +499,8 @@ class UniversalControllerClient:
                                         logger.debug(f"Ошибка сохранения события переключения: {e}")
                                 
                                 self.is_active = True
-                                self.controller.reset()  # Сбрасываем состояние регулятора
+                                # Восстанавливаем состояние PID из OPC UA вместо сброса
+                                await self.restore_pid_state()
                     else:
                         # Основной контроллер активен
                         if self.is_active:
@@ -513,6 +514,19 @@ class UniversalControllerClient:
                 else:
                     # Если не активен, просто мониторим
                     await self.monitor_only()
+                
+                # Дополнительная проверка для основного контроллера при восстановлении
+                if self.is_primary and self.is_active:
+                    # Проверяем, нужно ли восстановить состояние PID
+                    # (например, после перезагрузки контроллера)
+                    try:
+                        current_integral = await self.get_variable_value('pid_integral')
+                        if current_integral is not None and self.controller.integral == 0:
+                            # Состояние PID было сброшено, восстанавливаем
+                            await self.restore_pid_state()
+                            logger.info(f"🔄 {self.log_prefix} контроллер восстановил состояние PID после перезагрузки")
+                    except Exception as e:
+                        logger.debug(f"Ошибка проверки состояния PID: {e}")
                 
                 await asyncio.sleep(update_interval)
                 

@@ -8,12 +8,23 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import time
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional
 
 from opcua import Client
 from process_model import ProcessModel
 from database_manager import get_db_manager, DatabaseLogger
+
+# Импорт Telegram уведомлений
+TELEGRAM_AVAILABLE = False
+try:
+    sys.path.append('/app/telegram')
+    from telegram_bot import TelegramNotifier
+    TELEGRAM_AVAILABLE = True
+except ImportError:
+    logger.warning("⚠️ Telegram модуль недоступен")
 
 # Настройка логирования
 logging.basicConfig(
@@ -21,6 +32,11 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+def get_moscow_time():
+    """Получение текущего времени по МСК (UTC+3)"""
+    moscow_tz = timezone(timedelta(hours=3))
+    return datetime.now(moscow_tz)
 
 
 class ProcessModelClient:
@@ -50,6 +66,19 @@ class ProcessModelClient:
         self.db_manager = get_db_manager()
         self.db_logger = None
         
+        # Инициализация Telegram уведомлений
+        self.telegram_notifier = None
+        self.init_telegram_notifications()
+        
+        # Состояние для предотвращения спама уведомлений
+        self.notification_sent = {
+            'tank_overflow': False,
+            'tank_empty': False,
+            'tank_high': False,
+            'tank_low': False,
+            'valve_stuck': False
+        }
+        
         # Node IDs для переменных
         self.node_ids = {}
         self._setup_node_ids()
@@ -76,6 +105,171 @@ class ProcessModelClient:
             self.node_ids[var_name] = var_config['node_id']
             
         logger.info("🔗 Node IDs настроены")
+    
+    def init_telegram_notifications(self):
+        """Инициализация Telegram уведомлений"""
+        if not TELEGRAM_AVAILABLE:
+            logger.warning("⚠️ Telegram уведомления недоступны")
+            return
+        
+        try:
+            bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+            if not bot_token:
+                logger.warning("⚠️ TELEGRAM_BOT_TOKEN не установлен")
+                return
+            
+            self.telegram_notifier = TelegramNotifier(bot_token)
+            
+            # Загружаем подписчиков
+            try:
+                subscribers_file = '/app/data/telegram_subscribers.json'
+                if os.path.exists(subscribers_file):
+                    with open(subscribers_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        subscribers = data.get('subscribers', [])
+                        for chat_id in subscribers:
+                            self.telegram_notifier.subscribers.add(chat_id)
+                        logger.info(f"📋 Загружено {len(subscribers)} подписчиков")
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось загрузить подписчиков: {e}")
+            
+            logger.info("✅ Telegram уведомления инициализированы в модели процесса")
+        except Exception as e:
+            logger.error(f"❌ Ошибка инициализации Telegram: {e}")
+    
+    def send_notification(self, level: str, message: str, additional_data: Dict = None):
+        """Отправка уведомления"""
+        if not self.telegram_notifier:
+            return
+        
+        try:
+            asyncio.run(self.telegram_notifier.send_notification(
+                level, "process_model", message, additional_data
+            ))
+        except Exception as e:
+            logger.error(f"❌ Ошибка отправки уведомления: {e}")
+    
+    def check_critical_conditions(self, tank_level: float, valve_position: float, 
+                                 inlet_flow: float, outlet_flow: float):
+        """Проверка критических условий и отправка уведомлений"""
+        try:
+            # КРИТИЧЕСКИЕ УСЛОВИЯ (CRITICAL)
+            
+            # 1. Переполнение резервуара (критическое)
+            if tank_level > 2.8:  # 93% от высоты 3м
+                if not self.notification_sent['tank_overflow']:
+                    self.send_notification(
+                        "CRITICAL",
+                        "🚨 КРИТИЧЕСКОЕ ПЕРЕПОЛНЕНИЕ РЕЗЕРВУАРА!",
+                        {
+                            "Tank Level": f"{tank_level:.2f} м",
+                            "Max Height": "3.0 м",
+                            "Valve Position": f"{valve_position:.1f}%",
+                            "Outlet Flow": f"{outlet_flow:.1f} м³/ч",
+                            "Inlet Flow": f"{inlet_flow:.1f} м³/ч",
+                            "Action Required": "Немедленно увеличить расход через клапан!",
+                            "Time": get_moscow_time().strftime('%H:%M:%S')
+                        }
+                    )
+                    self.notification_sent['tank_overflow'] = True
+                    logger.critical("🚨 КРИТИЧЕСКОЕ ПЕРЕПОЛНЕНИЕ РЕЗЕРВУАРА!")
+            
+            # 2. Полное опорожнение резервуара (критическое)
+            elif tank_level < 0.1:  # 3% от высоты
+                if not self.notification_sent['tank_empty']:
+                    self.send_notification(
+                        "CRITICAL",
+                        "🚨 КРИТИЧЕСКОЕ ОПОРОЖНЕНИЕ РЕЗЕРВУАРА!",
+                        {
+                            "Tank Level": f"{tank_level:.2f} м",
+                            "Min Safe Level": "0.3 м",
+                            "Valve Position": f"{valve_position:.1f}%",
+                            "Outlet Flow": f"{outlet_flow:.1f} м³/ч",
+                            "Inlet Flow": f"{inlet_flow:.1f} м³/ч",
+                            "Action Required": "Немедленно уменьшить расход через клапан!",
+                            "Time": get_moscow_time().strftime('%H:%M:%S')
+                        }
+                    )
+                    self.notification_sent['tank_empty'] = True
+                    logger.critical("🚨 КРИТИЧЕСКОЕ ОПОРОЖНЕНИЕ РЕЗЕРВУАРА!")
+            
+            # 3. Клапан застрял в критическом положении
+            elif valve_position > 95:  # Клапан почти полностью открыт
+                if not self.notification_sent['valve_stuck']:
+                    self.send_notification(
+                        "CRITICAL",
+                        "🚨 КЛАПАН ЗАСТРЯЛ В ОТКРЫТОМ ПОЛОЖЕНИИ!",
+                        {
+                            "Valve Position": f"{valve_position:.1f}%",
+                            "Tank Level": f"{tank_level:.2f} м",
+                            "Action Required": "Проверить механизм клапана!",
+                            "Time": get_moscow_time().strftime('%H:%M:%S')
+                        }
+                    )
+                    self.notification_sent['valve_stuck'] = True
+                    logger.critical("🚨 КЛАПАН ЗАСТРЯЛ В ОТКРЫТОМ ПОЛОЖЕНИИ!")
+            
+            elif valve_position < 5:  # Клапан почти полностью закрыт
+                if not self.notification_sent['valve_stuck']:
+                    self.send_notification(
+                        "CRITICAL",
+                        "🚨 КЛАПАН ЗАСТРЯЛ В ЗАКРЫТОМ ПОЛОЖЕНИИ!",
+                        {
+                            "Valve Position": f"{valve_position:.1f}%",
+                            "Tank Level": f"{tank_level:.2f} м",
+                            "Action Required": "Проверить механизм клапана!",
+                            "Time": get_moscow_time().strftime('%H:%M:%S')
+                        }
+                    )
+                    self.notification_sent['valve_stuck'] = True
+                    logger.critical("🚨 КЛАПАН ЗАСТРЯЛ В ЗАКРЫТОМ ПОЛОЖЕНИИ!")
+            
+            # ПРЕДУПРЕЖДАЮЩИЕ УСЛОВИЯ (WARNING)
+            
+            # 1. Высокий уровень (предупреждение)
+            elif 2.4 < tank_level <= 2.8:  # 80-93% заполнения
+                if not self.notification_sent['tank_high']:
+                    self.send_notification(
+                        "WARNING",
+                        "⚠️ ВЫСОКИЙ УРОВЕНЬ В РЕЗЕРВУАРЕ",
+                        {
+                            "Tank Level": f"{tank_level:.2f} м",
+                            "Valve Position": f"{valve_position:.1f}%",
+                            "Warning Threshold": "80% (2.4м)",
+                            "Critical Threshold": "93% (2.8м)",
+                            "Time": get_moscow_time().strftime('%H:%M:%S')
+                        }
+                    )
+                    self.notification_sent['tank_high'] = True
+                    logger.warning("⚠️ ВЫСОКИЙ УРОВЕНЬ В РЕЗЕРВУАРЕ")
+            
+            # 2. Низкий уровень (предупреждение)
+            elif 0.1 <= tank_level < 0.3:  # 3-10% заполнения
+                if not self.notification_sent['tank_low']:
+                    self.send_notification(
+                        "WARNING",
+                        "⚠️ НИЗКИЙ УРОВЕНЬ В РЕЗЕРВУАРЕ",
+                        {
+                            "Tank Level": f"{tank_level:.2f} м",
+                            "Valve Position": f"{valve_position:.1f}%",
+                            "Warning Threshold": "10% (0.3м)",
+                            "Critical Threshold": "3% (0.1м)",
+                            "Time": get_moscow_time().strftime('%H:%M:%S')
+                        }
+                    )
+                    self.notification_sent['tank_low'] = True
+                    logger.warning("⚠️ НИЗКИЙ УРОВЕНЬ В РЕЗЕРВУАРЕ")
+            
+            # Сброс предупреждений при нормализации состояния
+            if 0.3 <= tank_level <= 2.4:  # Нормальный диапазон
+                self.notification_sent['tank_high'] = False
+                self.notification_sent['tank_low'] = False
+            
+            if 10 <= valve_position <= 90:  # Клапан в нормальном диапазоне
+                self.notification_sent['valve_stuck'] = False
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка проверки критических условий: {e}")
     
     def _connect_to_server(self) -> bool:
         """Подключение к OPC UA серверу"""
@@ -197,12 +391,20 @@ class ProcessModelClient:
             if not success_flow:
                 logger.error("❌ ОШИБКА: Не удалось установить outlet_flow на сервере")
             
+            # Проверка критических условий и отправка уведомлений
+            inlet_flow = self._get_variable_value('inlet_flow') or 100.0
+            self.check_critical_conditions(
+                result['liquid_level'], 
+                valve_opening, 
+                inlet_flow, 
+                result['outlet_flow']
+            )
+            
             # Сохранение данных в базу данных
             if self.db_manager and self.db_manager.sync_connection:
                 try:
                     # Получаем дополнительные данные с сервера
                     sp_level = self._get_variable_value('SP_level') or 2.0
-                    inlet_flow = self._get_variable_value('inlet_flow') or 100.0
                     tank_pressure = result.get('tank_pressure', 0)
                     
                     # Проверка корректности данных перед сохранением
