@@ -4,11 +4,11 @@ services:
     image: postgres:15-alpine
     container_name: digital-twin-db
     environment:
-      - POSTGRES_DB=digital_twin_db
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres_password
+      - POSTGRES_DB=${DB_NAME}
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
     ports:
-      - "5432:5432"
+      - "${DB_PORT}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./database/init:/docker-entrypoint-initdb.d
@@ -16,7 +16,7 @@ services:
       - process-network
     restart: unless-stopped
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U postgres -d digital_twin_db" ]
+      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -29,15 +29,15 @@ services:
       database:
         condition: service_healthy
     ports:
-      - "4840:4840"
+      - "${OPCUA_SERVER_PORT}:4840"
     volumes:
       - ./config.json:/app/config.json
     environment:
-      - DB_HOST=database
-      - DB_PORT=5432
-      - DB_NAME=digital_twin_db
-      - DB_USER=process_user
-      - DB_PASSWORD=process_password
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
     networks:
       - process-network
     restart: unless-stopped
@@ -56,13 +56,13 @@ services:
       - ./telegram:/app/telegram
       - telegram_data:/app/data
     environment:
-      - OPCUA_SERVER_URL=opc.tcp://opcua-server:4840/freeopcua/server/
-      - DB_HOST=database
-      - DB_PORT=5432
-      - DB_NAME=digital_twin_db
-      - DB_USER=process_user
-      - DB_PASSWORD=process_password
-      - TELEGRAM_BOT_TOKEN=8499179904:AAGfcyftDeJlFjw5VVom5UvljFHDhYidCEw
+      - OPCUA_SERVER_URL=${OPCUA_SERVER_ENDPOINT}
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
     networks:
       - process-network
     restart: unless-stopped
@@ -79,20 +79,20 @@ services:
       - ./config.json:/app/config.json
       - ./database/database_manager.py:/app/database_manager.py
     environment:
-      - OPCUA_SERVER_URL=opc.tcp://opcua-server:4840/freeopcua/server/
-      - CONTROLLER_MODE=primary
-      - DB_HOST=database
-      - DB_PORT=5432
-      - DB_NAME=digital_twin_db
-      - DB_USER=process_user
-      - DB_PASSWORD=process_password
-      - TELEGRAM_BOT_TOKEN=8499179904:AAGfcyftDeJlFjw5VVom5UvljFHDhYidCEw
+      - OPCUA_SERVER_URL=${OPCUA_SERVER_ENDPOINT}
+      - CONTROLLER_MODE=${CONTROLLER_MODE}
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
     networks:
       - process-network
     restart: unless-stopped
     command: [ "python", "universal_controller.py" ]
     healthcheck:
-      test: [ "CMD", "python", "-c", "import socket; s = socket.socket(); s.connect(('opcua-server', 4840)); s.close()" ]
+      test: [ "CMD", "python", "-c", "import socket; s = socket.socket(); s.connect(('opcua-server', ${OPCUA_SERVER_PORT})); s.close()" ]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -112,24 +112,25 @@ services:
       - ./config.json:/app/config.json
       - ./database/database_manager.py:/app/database_manager.py
     environment:
-      - OPCUA_SERVER_URL=opc.tcp://opcua-server:4840/freeopcua/server/
-      - CONTROLLER_MODE=backup
-      - DB_HOST=database
-      - DB_PORT=5432
-      - DB_NAME=digital_twin_db
-      - DB_USER=process_user
-      - DB_PASSWORD=process_password
-      - TELEGRAM_BOT_TOKEN=8499179904:AAGfcyftDeJlFjw5VVom5UvljFHDhYidCEw
+      - OPCUA_SERVER_URL=${OPCUA_SERVER_ENDPOINT}
+      - CONTROLLER_MODE=${CONTROLLER_BACKUP_MODE}
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
     networks:
       - process-network
     restart: unless-stopped
     command: [ "python", "universal_controller.py" ]
     healthcheck:
-      test: [ "CMD", "python", "-c", "import socket; s = socket.socket(); s.connect(('opcua-server', 4840)); s.close()" ]
+      test: [ "CMD", "python", "-c", "import socket; s = socket.socket(); s.connect(('opcua-server', ${OPCUA_SERVER_PORT})); s.close()" ]
       interval: 10s
       timeout: 5s
       retries: 3
       start_period: 30s
+
   controller-watchdog-service:
     build: ./controller-watchdog-service
     container_name: controller-watchdog-service
@@ -148,8 +149,8 @@ services:
       - telegram_data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
-      - OPCUA_SERVER_URL=opc.tcp://opcua-server:4840/freeopcua/server/
-      - TELEGRAM_BOT_TOKEN=8499179904:AAGfcyftDeJlFjw5VVom5UvljFHDhYidCEw
+      - OPCUA_SERVER_URL=${OPCUA_SERVER_ENDPOINT}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
     networks:
       - process-network
     restart: unless-stopped
@@ -165,7 +166,7 @@ services:
       - telegram_data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
-      - TELEGRAM_BOT_TOKEN=8499179904:AAGfcyftDeJlFjw5VVom5UvljFHDhYidCEw
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
     networks:
       - process-network
     restart: unless-stopped
@@ -178,22 +179,22 @@ services:
       database:
         condition: service_healthy
     ports:
-      - "8080:8080"
+      - "${ANALYTICS_PORT}:8080"
     volumes:
       - ./database/database_manager.py:/app/database_manager.py
     environment:
-      - DB_HOST=${DB_HOST:-database}
-      - DB_PORT=${DB_PORT:-5432}
-      - DB_NAME=${DB_NAME:-digital_twin_db}
-      - DB_USER=${DB_USER:-process_user}
-      - DB_PASSWORD=${DB_PASSWORD:-process_password}
-      - ANALYTICS_PORT=${ANALYTICS_PORT:-8080}
-      - ANALYTICS_HOST=${ANALYTICS_HOST:-0.0.0.0}
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - ANALYTICS_PORT=${ANALYTICS_PORT}
+      - ANALYTICS_HOST=${ANALYTICS_HOST}
     networks:
       - process-network
     restart: unless-stopped
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
+      test: [ "CMD", "curl", "-f", "http://localhost:${ANALYTICS_PORT}/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -210,16 +211,16 @@ services:
       - ./config.json:/app/config.json
       - ./database/database_manager.py:/app/database_manager.py
     environment:
-      - TELEGRAM_BOT_TOKEN=8499179904:AAGfcyftDeJlFjw5VVom5UvljFHDhYidCEw
-      - ADMIN_CHAT_ID=${ADMIN_CHAT_ID:-}
-      - DB_HOST=${DB_HOST:-database}
-      - DB_PORT=${DB_PORT:-5432}
-      - DB_NAME=${DB_NAME:-digital_twin_db}
-      - DB_USER=${DB_USER:-process_user}
-      - DB_PASSWORD=${DB_PASSWORD:-process_password}
-      - LOGGING_LEVEL=${LOGGING_LEVEL:-INFO}
-      - DEBUG_MODE=${DEBUG_MODE:-false}
-      - HEALTH_CHECK_INTERVAL=${HEALTH_CHECK_INTERVAL:-30.0}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - ADMIN_CHAT_ID=${ADMIN_CHAT_ID}
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - LOGGING_LEVEL=${LOGGING_LEVEL}
+      - DEBUG_MODE=${DEBUG_MODE}
+      - HEALTH_CHECK_INTERVAL=${HEALTH_CHECK_INTERVAL}
     networks:
       - process-network
     restart: unless-stopped

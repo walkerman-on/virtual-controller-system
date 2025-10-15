@@ -1,3 +1,4 @@
 opcua==0.98.13
 cryptography>=3.4.8
 asyncio-mqtt==0.16.1
+python-dotenv==1.0.0

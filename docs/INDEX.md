@@ -1,94 +1,102 @@
-# 📚 Полная документация системы виртуального контроллера
+# Документация системы виртуального контроллера
 
-## 🚀 Быстрый старт
-- [**QUICK_START.md**](QUICK_START.md) - Быстрый старт системы
+## Обзор системы
+- [SYSTEM_OVERVIEW.md](SYSTEM_OVERVIEW.md) - Общий обзор системы и архитектуры
 
-## 🏗️ Архитектура и проектирование
-- [**ARCHITECTURE.md**](ARCHITECTURE.md) - Архитектура системы
-- [**PROJECT_SUMMARY.md**](PROJECT_SUMMARY.md) - Описание проекта
-- [**CONNECTION_SETTINGS.md**](CONNECTION_SETTINGS.md) - Настройки подключений
+## Конфигурация
+- [CONFIGURATION_SYSTEM.md](CONFIGURATION_SYSTEM.md) - Система конфигурации (.env + config.json)
 
-## 📦 Документация контейнеров
-- [**Analytics Service**](containers/analytics.md) - Сервис аналитики
-- [**Controller**](containers/controller.md) - PID контроллеры
-- [**Database**](containers/database.md) - База данных PostgreSQL
-- [**Process Model**](containers/model.md) - Модель процесса
-- [**OPC UA Server**](containers/opcua-server.md) - OPC UA сервер
-- [**Telegram Bot**](containers/telegram-bot.md) - Telegram бот
-- [**Watchdog**](containers/watchdog.md) - Сервис мониторинга
+## Контейнеры
 
-## 🧪 Тестирование и диагностика
-- [**Тестовые команды**](tests/test-commands.md) - Команды для тестирования
+### Основные сервисы
+- [DATABASE.md](CONTAINERS/DATABASE.md) - База данных PostgreSQL
+- [OPCUA_SERVER.md](CONTAINERS/OPCUA_SERVER.md) - OPC UA сервер
+- [PROCESS_MODEL.md](CONTAINERS/PROCESS_MODEL.md) - Модель процесса
 
-## 📋 API и интерфейсы
-- [**SETPOINT_API.md**](SETPOINT_API.md) - API уставок
-- [**LOGGING_DOCUMENTATION.md**](LOGGING_DOCUMENTATION.md) - Документация по логированию
+### Контроллеры
+- [CONTROLLERS.md](CONTAINERS/CONTROLLERS.md) - PID контроллеры (основной и резервный)
 
-## 📖 Общая информация
-- [**README.md**](README.md) - Основная документация
+### Дополнительные сервисы
+- [ANALYTICS.md](CONTAINERS/ANALYTICS.md) - Сервис аналитики
+- [TELEGRAM_BOT.md](CONTAINERS/TELEGRAM_BOT.md) - Telegram бот
+- [WATCHDOG.md](CONTAINERS/WATCHDOG.md) - Watchdog сервисы
 
----
+## Быстрый старт
 
-## 🔍 Поиск по документации
+### 1. Настройка
+```bash
+# Скопировать пример конфигурации
+cp env.example .env
 
-### По компонентам:
-- **Analytics** → [Analytics Service](containers/analytics.md)
-- **Controller** → [Controller](containers/controller.md)
-- **Database** → [Database](containers/database.md)
-- **Model** → [Process Model](containers/model.md)
-- **OPC UA** → [OPC UA Server](containers/opcua-server.md)
-- **Telegram** → [Telegram Bot](containers/telegram-bot.md)
-- **Watchdog** → [Watchdog](containers/watchdog.md)
-
-### По задачам:
-- **Запуск системы** → [QUICK_START.md](QUICK_START.md)
-- **Тестирование** → [Тестовые команды](tests/test-commands.md)
-- **API** → [SETPOINT_API.md](SETPOINT_API.md)
-- **Логирование** → [LOGGING_DOCUMENTATION.md](LOGGING_DOCUMENTATION.md)
-- **Подключения** → [CONNECTION_SETTINGS.md](CONNECTION_SETTINGS.md)
-
-### По проблемам:
-- **Не запускается** → [QUICK_START.md](QUICK_START.md) + [Тестовые команды](tests/test-commands.md)
-- **Нет уведомлений** → [Telegram Bot](containers/telegram-bot.md)
-- **Ошибки контроллера** → [Controller](containers/controller.md)
-- **Проблемы с БД** → [Database](containers/database.md)
-- **OPC UA не работает** → [OPC UA Server](containers/opcua-server.md)
-
----
-
-## 📝 Структура документации
-
-```
-docs/
-├── README.md                    # Основная документация
-├── QUICK_START.md              # Быстрый старт
-├── ARCHITECTURE.md             # Архитектура
-├── PROJECT_SUMMARY.md          # Описание проекта
-├── CONNECTION_SETTINGS.md      # Настройки подключений
-├── SETPOINT_API.md             # API уставок
-├── LOGGING_DOCUMENTATION.md    # Документация по логированию
-├── containers/                 # Документация контейнеров
-│   ├── analytics.md
-│   ├── controller.md
-│   ├── database.md
-│   ├── model.md
-│   ├── opcua-server.md
-│   ├── telegram-bot.md
-│   └── watchdog.md
-└── tests/                      # Тестирование
-    └── test-commands.md
+# Отредактировать .env файл
+nano .env
 ```
 
----
+### 2. Запуск
+```bash
+# Запустить все сервисы
+docker-compose up -d
 
-## 🆘 Получение помощи
+# Проверить статус
+docker-compose ps
+```
 
-1. **Начните с** [QUICK_START.md](QUICK_START.md)
-2. **Для тестирования** используйте [Тестовые команды](tests/test-commands.md)
-3. **Для конкретного компонента** смотрите документацию в папке `containers/`
-4. **Для API** смотрите [SETPOINT_API.md](SETPOINT_API.md)
-5. **Для архитектуры** смотрите [ARCHITECTURE.md](ARCHITECTURE.md)
+### 3. Мониторинг
+```bash
+# Просмотр логов
+docker-compose logs -f
 
----
+# Просмотр логов конкретного сервиса
+docker-compose logs -f telegram-bot
+```
 
-*Последнее обновление: $(date)*
+### 4. Telegram бот
+1. Получите токен от @BotFather
+2. Добавьте токен в `.env` файл
+3. Найдите бота в Telegram
+4. Отправьте `/start` для подписки на уведомления
+
+## Порты
+- **5432** - PostgreSQL
+- **4840** - OPC UA Server
+- **8080** - Analytics Service
+
+## Переменные окружения
+Все настройки в `.env` файле:
+- `TELEGRAM_BOT_TOKEN` - токен Telegram бота
+- `DB_PASSWORD` - пароль базы данных
+- `OPCUA_SERVER_PORT` - порт OPC UA сервера
+- `ANALYTICS_PORT` - порт сервиса аналитики
+
+## Структура проекта
+```
+├── .env                    # Переменные окружения
+├── config.json             # Параметры системы
+├── docker-compose.yml      # Оркестрация контейнеров
+├── docs/                   # Документация
+│   ├── INDEX.md           # Этот файл
+│   ├── SYSTEM_OVERVIEW.md # Обзор системы
+│   ├── CONFIGURATION_SYSTEM.md # Конфигурация
+│   └── CONTAINERS/        # Документация контейнеров
+│       ├── DATABASE.md     # База данных
+│       ├── OPCUA_SERVER.md # OPC UA сервер
+│       ├── PROCESS_MODEL.md # Модель процесса
+│       ├── CONTROLLERS.md  # PID контроллеры
+│       ├── ANALYTICS.md    # Сервис аналитики
+│       ├── TELEGRAM_BOT.md # Telegram бот
+│       └── WATCHDOG.md     # Watchdog сервисы
+├── database/              # Скрипты БД
+├── controller/            # PID контроллеры
+├── opcua-server/         # OPC UA сервер
+├── model/                # Модель процесса
+├── analytics/            # Сервис аналитики
+├── telegram/             # Telegram бот
+└── utils/                # Утилиты
+```
+
+## Поддержка
+При возникновении проблем:
+1. Проверьте логи: `docker-compose logs`
+2. Проверьте статус: `docker-compose ps`
+3. Проверьте конфигурацию: `python3 utils/config_loader.py`
+4. Обратитесь к документации конкретного контейнера
