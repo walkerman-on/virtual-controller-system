@@ -1,5 +1,0 @@
-opcua
-cryptography
-asyncpg==0.28.0
-psycopg2-binary==2.9.7
-docker
