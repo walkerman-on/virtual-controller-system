@@ -8,11 +8,26 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import time
 from typing import Dict, Any, Optional
 
 from opcua import Client
 from database_manager import get_db_manager, DatabaseLogger
+
+# Импорт Telegram уведомлений (опционально)
+TELEGRAM_AVAILABLE = False
+try:
+    # Добавляем путь к модулю Telegram
+    telegram_path = os.path.join(os.path.dirname(__file__), '..', 'telegram')
+    if os.path.exists(telegram_path):
+        sys.path.append(telegram_path)
+        from telegram_bot import get_telegram_notifier
+        TELEGRAM_AVAILABLE = True
+        print("✅ Telegram модуль загружен в контроллере")
+except (ImportError, FileNotFoundError) as e:
+    TELEGRAM_AVAILABLE = False
+    print(f"⚠️ Telegram модуль недоступен в контроллере: {e}")
 
 # Настройка логирования
 logging.basicConfig(
@@ -20,6 +35,20 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+async def send_telegram_notification(level: str, component: str, message: str, 
+                                   additional_data: Optional[Dict] = None):
+    """Отправка уведомления через Telegram"""
+    if not TELEGRAM_AVAILABLE:
+        return
+    
+    try:
+        notifier = get_telegram_notifier()
+        if notifier:
+            await notifier.send_notification(level, component, message, additional_data)
+    except Exception as e:
+        logger.error(f"❌ Ошибка отправки Telegram уведомления: {e}")
 
 
 class PIDController:
@@ -89,37 +118,93 @@ class PIDController:
         Returns:
             Выходной сигнал регулятора
         """
-        # Расчет ошибки по ГОСТ формуле: e = action * (PV - SP)
-        # action = 1 для прямого действия (клапан открывается при увеличении PV)
-        action = 1
-        error = action * (process_value - setpoint)
-        
-        # Пропорциональная составляющая: P = Kc * e
-        P = self.kp * error
-        
-        # Интегральная составляющая по ГОСТ формуле: Ii = Ii-1 + ei * Δt
-        self.integral += error * dt
-        # Ограничение интегральной составляющей
-        self.integral = max(-self.integral_limit, min(self.integral, self.integral_limit))
-        I = (1.0 / self.ki) * self.integral  # I = (1/Tи) * Ii
-        
-        # Дифференциальная составляющая
-        if dt > 0:
-            D = self.kd * (error - self.previous_error) / dt
-        else:
-            D = 0.0
-        
-        # Общий выходной сигнал по ГОСТ формуле: OPi = Kc*ei + (1/Tи)*Ii + ОРнач
-        op_start = 50.0  # Начальное значение выхода
-        output = P + I + op_start
-        
-        # Ограничение выхода
-        output = max(self.output_min, min(output, self.output_max))
-        
-        # Сохранение состояния для следующего шага
-        self.previous_error = error
-        
-        return output
+        try:
+            # Проверка корректности входных данных
+            if setpoint is None or process_value is None:
+                logger.error(f"❌ PID: Получены None значения - SP={setpoint}, PV={process_value}")
+                return 50.0  # Возвращаем безопасное значение
+            
+            if dt <= 0:
+                logger.error(f"❌ PID: Некорректный временной шаг {dt}")
+                dt = 0.1  # Используем безопасное значение
+            
+            # Проверка на аномальные значения
+            if setpoint < 0 or setpoint > 10:
+                logger.warning(f"⚠️ PID: Аномальная уставка {setpoint:.3f}м")
+            if process_value < 0 or process_value > 10:
+                logger.warning(f"⚠️ PID: Аномальное значение процесса {process_value:.3f}м")
+            
+            # Расчет ошибки по ГОСТ формуле: e = action * (PV - SP)
+            # action = 1 для прямого действия (клапан открывается при увеличении PV)
+            action = 1
+            error = action * (process_value - setpoint)
+            
+            # Проверка на большие ошибки
+            if abs(error) > 2.0:  # Ошибка больше 2 метров
+                logger.warning(f"⚠️ PID: Большая ошибка {error:.3f}м - SP={setpoint:.3f}м, PV={process_value:.3f}м")
+                # Отправка предупреждения в Telegram (асинхронно)
+                if TELEGRAM_AVAILABLE:
+                    try:
+                        loop = asyncio.get_event_loop()
+                        loop.create_task(send_telegram_notification(
+                            'WARNING', 'pid_controller',
+                            f"Большая ошибка управления {error:.3f}м",
+                            {
+                                'setpoint': f"{setpoint:.3f}м",
+                                'process_value': f"{process_value:.3f}м",
+                                'error': f"{error:.3f}м"
+                            }
+                        ))
+                    except Exception as e:
+                        logger.debug(f"Ошибка отправки Telegram уведомления: {e}")
+            
+            # Пропорциональная составляющая: P = Kc * e
+            P = self.kp * error
+            
+            # Интегральная составляющая по ГОСТ формуле: Ii = Ii-1 + ei * Δt
+            self.integral += error * dt
+            # Ограничение интегральной составляющей
+            self.integral = max(-self.integral_limit, min(self.integral, self.integral_limit))
+            I = (1.0 / self.ki) * self.integral  # I = (1/Tи) * Ii
+            
+            # Проверка на переполнение интегральной составляющей
+            if abs(self.integral) >= self.integral_limit:
+                logger.warning(f"⚠️ PID: Интегральная составляющая достигла лимита {self.integral:.3f}")
+            
+            # Дифференциальная составляющая
+            if dt > 0:
+                D = self.kd * (error - self.previous_error) / dt
+            else:
+                D = 0.0
+            
+            # Общий выходной сигнал по ГОСТ формуле: OPi = Kc*ei + (1/Tи)*Ii + ОРнач
+            op_start = 50.0  # Начальное значение выхода
+            output = P + I + op_start
+            
+            # Проверка на аномальные значения выхода
+            if output < 0 or output > 100:
+                logger.warning(f"⚠️ PID: Аномальный выход {output:.3f}% - P={P:.3f}, I={I:.3f}, D={D:.3f}")
+            
+            # Ограничение выхода
+            old_output = output
+            output = max(self.output_min, min(output, self.output_max))
+            
+            if old_output != output:
+                logger.warning(f"⚠️ PID: Выход ограничен с {old_output:.3f}% до {output:.3f}%")
+            
+            # Сохранение состояния для следующего шага
+            self.previous_error = error
+            
+            # Логирование критических состояний
+            if abs(error) > 1.0:  # Ошибка больше 1 метра
+                logger.info(f"🔍 PID: Большая ошибка {error:.3f}м - SP={setpoint:.3f}м, PV={process_value:.3f}м, OP={output:.1f}%")
+            
+            return output
+            
+        except Exception as e:
+            logger.error(f"❌ PID: Критическая ошибка расчета: {e}")
+            # Возвращаем безопасное значение при ошибке
+            return 50.0
 
 
 class UniversalControllerClient:
@@ -190,15 +275,26 @@ class UniversalControllerClient:
         try:
             pv_config = self.config['opcua_variables']['process_variables']
             if var_name not in pv_config:
-                logger.error(f"Переменная {var_name} не найдена в конфигурации")
+                logger.error(f"❌ {self.log_prefix}: Переменная {var_name} не найдена в конфигурации")
                 return None
                 
             node_id = pv_config[var_name]['node_id']
             var_node = self.client.get_node(node_id)
             value = var_node.get_value()
+            
+            # Проверка корректности полученного значения
+            if value is None:
+                logger.warning(f"⚠️ {self.log_prefix}: Получено None значение для {var_name}")
+            elif isinstance(value, (int, float)):
+                # Проверка на аномальные значения для критических переменных
+                if var_name in ['SP_level', 'PV_level'] and (value < 0 or value > 10):
+                    logger.warning(f"⚠️ {self.log_prefix}: Аномальное значение {var_name}={value:.3f}м")
+                elif var_name == 'OP_valve' and (value < 0 or value > 100):
+                    logger.warning(f"⚠️ {self.log_prefix}: Аномальное значение {var_name}={value:.1f}%")
+            
             return value
         except Exception as e:
-            logger.error(f"Ошибка получения значения {var_name}: {e}")
+            logger.error(f"❌ {self.log_prefix}: Ошибка получения значения {var_name}: {e}")
             return None
 
     async def set_variable_value(self, var_name: str, value: float) -> bool:
@@ -206,15 +302,36 @@ class UniversalControllerClient:
         try:
             pv_config = self.config['opcua_variables']['process_variables']
             if var_name not in pv_config:
-                logger.error(f"Переменная {var_name} не найдена в конфигурации")
+                logger.error(f"❌ {self.log_prefix}: Переменная {var_name} не найдена в конфигурации")
+                return False
+            
+            # Проверка корректности значения перед установкой
+            if value is None:
+                logger.error(f"❌ {self.log_prefix}: Попытка установить None значение для {var_name}")
+                return False
+            
+            if isinstance(value, (int, float)):
+                # Проверка на аномальные значения для критических переменных
+                if var_name in ['SP_level', 'PV_level'] and (value < 0 or value > 10):
+                    logger.warning(f"⚠️ {self.log_prefix}: Установка аномального значения {var_name}={value:.3f}м")
+                elif var_name == 'OP_valve' and (value < 0 or value > 100):
+                    logger.warning(f"⚠️ {self.log_prefix}: Установка аномального значения {var_name}={value:.1f}%")
+                
+                node_id = pv_config[var_name]['node_id']
+                var_node = self.client.get_node(node_id)
+                var_node.set_value(value)
+                
+                # Логирование критических изменений
+                if var_name == 'OP_valve' and abs(value - 50.0) > 30:  # Отклонение больше 30%
+                    logger.info(f"🔧 {self.log_prefix}: Значительное изменение клапана на {value:.1f}%")
+                
+                return True
+            else:
+                logger.error(f"❌ {self.log_prefix}: Некорректный тип значения для {var_name}: {type(value)}")
                 return False
                 
-            node_id = pv_config[var_name]['node_id']
-            var_node = self.client.get_node(node_id)
-            var_node.set_value(value)
-            return True
         except Exception as e:
-            logger.error(f"Ошибка установки значения {var_name}: {e}")
+            logger.error(f"❌ {self.log_prefix}: Ошибка установки значения {var_name}: {e}")
             return False
 
     async def update_controller_status(self):
@@ -351,6 +468,23 @@ class UniversalControllerClient:
                             if not self.is_active:
                                 logger.critical("🚨 ПЕРЕКЛЮЧЕНИЕ НА РЕЗЕРВНЫЙ КОНТРОЛЛЕР!")
                                 
+                                # Отправка критического уведомления о переключении в Telegram
+                                if TELEGRAM_AVAILABLE:
+                                    try:
+                                        await send_telegram_notification(
+                                            'CRITICAL', 'controller_failover',
+                                            "ПЕРЕКЛЮЧЕНИЕ НА РЕЗЕРВНЫЙ КОНТРОЛЛЕР!",
+                                            {
+                                                'from_controller': 'primary',
+                                                'to_controller': 'backup',
+                                                'reason': 'Primary controller heartbeat timeout',
+                                                'duration_seconds': f"{time.time() - other_controller_failed_time:.1f}с",
+                                                'failover_delay': f"{failover_delay}с"
+                                            }
+                                        )
+                                    except Exception as e:
+                                        logger.debug(f"Ошибка отправки Telegram уведомления о переключении: {e}")
+                                
                                 # Сохранение события переключения в БД
                                 if self.db_manager and self.db_manager.async_pool:
                                     try:
@@ -365,7 +499,8 @@ class UniversalControllerClient:
                                         logger.debug(f"Ошибка сохранения события переключения: {e}")
                                 
                                 self.is_active = True
-                                self.controller.reset()  # Сбрасываем состояние регулятора
+                                # Восстанавливаем состояние PID из OPC UA вместо сброса
+                                await self.restore_pid_state()
                     else:
                         # Основной контроллер активен
                         if self.is_active:
@@ -379,6 +514,19 @@ class UniversalControllerClient:
                 else:
                     # Если не активен, просто мониторим
                     await self.monitor_only()
+                
+                # Дополнительная проверка для основного контроллера при восстановлении
+                if self.is_primary and self.is_active:
+                    # Проверяем, нужно ли восстановить состояние PID
+                    # (например, после перезагрузки контроллера)
+                    try:
+                        current_integral = await self.get_variable_value('pid_integral')
+                        if current_integral is not None and self.controller.integral == 0:
+                            # Состояние PID было сброшено, восстанавливаем
+                            await self.restore_pid_state()
+                            logger.info(f"🔄 {self.log_prefix} контроллер восстановил состояние PID после перезагрузки")
+                    except Exception as e:
+                        logger.debug(f"Ошибка проверки состояния PID: {e}")
                 
                 await asyncio.sleep(update_interval)
                 
@@ -394,12 +542,26 @@ class UniversalControllerClient:
             process_value = await self.get_variable_value('PV_level')
             
             if setpoint is None or process_value is None:
-                logger.error("Не удалось получить значения SP или PV")
+                logger.error(f"❌ {self.log_prefix}: Не удалось получить значения SP или PV")
+                return
+            
+            # Проверка корректности полученных значений
+            if setpoint < 0 or setpoint > 10:
+                logger.error(f"❌ {self.log_prefix}: КРИТИЧЕСКАЯ ОШИБКА - некорректная уставка {setpoint:.3f}м")
+                return
+            
+            if process_value < 0 or process_value > 10:
+                logger.error(f"❌ {self.log_prefix}: КРИТИЧЕСКАЯ ОШИБКА - некорректное значение процесса {process_value:.3f}м")
                 return
             
             # Расчет управляющего воздействия
             dt = self.config['system_settings']['controller_update_interval']
             output = self.controller.calculate(setpoint, process_value, dt)
+            
+            # Проверка корректности рассчитанного выхода
+            if output is None or output < 0 or output > 100:
+                logger.error(f"❌ {self.log_prefix}: КРИТИЧЕСКАЯ ОШИБКА - некорректный выход регулятора {output}")
+                return
             
             # Установка управляющего воздействия
             success = await self.set_variable_value('OP_valve', output)
@@ -428,22 +590,100 @@ class UniversalControllerClient:
                             error_value=error
                         )
                     except Exception as e:
-                        logger.debug(f"Ошибка сохранения данных в БД: {e}")
+                        logger.error(f"❌ {self.log_prefix}: Ошибка сохранения данных в БД: {e}")
                 
                 error = process_value - setpoint
-                logger.info(f"🎛️ {self.log_prefix} ПИ расчет: SP={setpoint:.3f}, PV={process_value:.3f}, "
-                           f"Error={error:.3f}, P={self.controller.kp * error:.3f}, "
-                           f"I={(1.0 / self.controller.ki) * self.controller.integral:.3f}, "
-                           f"D=0.000, OP_start=50.0, Output={output:.3f}")
-                logger.info(f"🎛️ {self.log_prefix} PID расчет: SP={setpoint:.3f}м, PV={process_value:.3f}м, "
-                           f"Error={error:.3f}м, Output={output:.3f}")
+                
+                # Логирование критических состояний
+                if abs(error) > 1.0:  # Ошибка больше 1 метра
+                    logger.warning(f"⚠️ {self.log_prefix}: КРИТИЧЕСКАЯ ОШИБКА УПРАВЛЕНИЯ {error:.3f}м!")
+                    # Отправка критического уведомления в Telegram
+                    if TELEGRAM_AVAILABLE:
+                        try:
+                            await send_telegram_notification(
+                                'CRITICAL', 'controller',
+                                f"КРИТИЧЕСКАЯ ОШИБКА УПРАВЛЕНИЯ {error:.3f}м!",
+                                {
+                                    'controller_mode': self.mode,
+                                    'setpoint': f"{setpoint:.3f}м",
+                                    'process_value': f"{process_value:.3f}м",
+                                    'error': f"{error:.3f}м",
+                                    'output': f"{output:.1f}%",
+                                    'is_active': self.is_active
+                                }
+                            )
+                        except Exception as e:
+                            logger.debug(f"Ошибка отправки Telegram уведомления: {e}")
+                elif abs(error) > 0.5:  # Ошибка больше 0.5 метра
+                    logger.warning(f"⚠️ {self.log_prefix}: Большая ошибка управления {error:.3f}м")
+                    # Отправка предупреждения в Telegram
+                    if TELEGRAM_AVAILABLE:
+                        try:
+                            await send_telegram_notification(
+                                'WARNING', 'controller',
+                                f"Большая ошибка управления {error:.3f}м",
+                                {
+                                    'controller_mode': self.mode,
+                                    'setpoint': f"{setpoint:.3f}м",
+                                    'process_value': f"{process_value:.3f}м",
+                                    'error': f"{error:.3f}м",
+                                    'output': f"{output:.1f}%"
+                                }
+                            )
+                        except Exception as e:
+                            logger.debug(f"Ошибка отправки Telegram уведомления: {e}")
+                
+                # Проверка на критические значения выхода
+                if output < 5:
+                    logger.warning(f"⚠️ {self.log_prefix}: Критически низкий выход {output:.1f}% - возможен застой!")
+                    # Отправка предупреждения в Telegram
+                    if TELEGRAM_AVAILABLE:
+                        try:
+                            await send_telegram_notification(
+                                'WARNING', 'controller',
+                                f"Критически низкий выход контроллера {output:.1f}% - возможен застой!",
+                                {
+                                    'controller_mode': self.mode,
+                                    'output_percentage': f"{output:.1f}%",
+                                    'setpoint': f"{setpoint:.3f}м",
+                                    'process_value': f"{process_value:.3f}м"
+                                }
+                            )
+                        except Exception as e:
+                            logger.debug(f"Ошибка отправки Telegram уведомления: {e}")
+                elif output > 95:
+                    logger.warning(f"⚠️ {self.log_prefix}: Критически высокий выход {output:.1f}% - возможен перелив!")
+                    # Отправка предупреждения в Telegram
+                    if TELEGRAM_AVAILABLE:
+                        try:
+                            await send_telegram_notification(
+                                'WARNING', 'controller',
+                                f"Критически высокий выход контроллера {output:.1f}% - возможен перелив!",
+                                {
+                                    'controller_mode': self.mode,
+                                    'output_percentage': f"{output:.1f}%",
+                                    'setpoint': f"{setpoint:.3f}м",
+                                    'process_value': f"{process_value:.3f}м"
+                                }
+                            )
+                        except Exception as e:
+                            logger.debug(f"Ошибка отправки Telegram уведомления: {e}")
+                
                 logger.info(f"🎛️ {self.log_prefix} PID: SP={setpoint:.3f}м, PV={process_value:.3f}м, "
                            f"Error={error:.3f}м, OP={output:.1f}%")
             else:
-                logger.error("Не удалось установить управляющее воздействие")
+                logger.error(f"❌ {self.log_prefix}: Не удалось установить управляющее воздействие")
                 
         except Exception as e:
-            logger.error(f"Ошибка выполнения управления: {e}")
+            logger.error(f"❌ {self.log_prefix}: Критическая ошибка выполнения управления: {e}")
+            # Попытка восстановления
+            try:
+                logger.info(f"🔄 {self.log_prefix}: Попытка восстановления состояния контроллера...")
+                if self.controller:
+                    self.controller.reset()
+                    logger.info(f"✅ {self.log_prefix}: Состояние контроллера сброшено")
+            except Exception as recovery_error:
+                logger.critical(f"🚨 {self.log_prefix}: КРИТИЧЕСКАЯ ОШИБКА: Не удалось восстановить контроллер: {recovery_error}")
 
     async def monitor_only(self):
         """Мониторинг без управления"""
@@ -453,9 +693,24 @@ class UniversalControllerClient:
             op = await self.get_variable_value('OP_valve')
             
             if sp is not None and pv is not None and op is not None:
+                # Проверка на критические состояния при мониторинге
+                error = pv - sp
+                if abs(error) > 1.0:
+                    logger.warning(f"⚠️ {self.log_prefix} (мониторинг): КРИТИЧЕСКАЯ ОШИБКА {error:.3f}м!")
+                elif abs(error) > 0.5:
+                    logger.warning(f"⚠️ {self.log_prefix} (мониторинг): Большая ошибка {error:.3f}м")
+                
+                # Проверка критических значений клапана
+                if op < 5:
+                    logger.warning(f"⚠️ {self.log_prefix} (мониторинг): Критически низкий клапан {op:.1f}%")
+                elif op > 95:
+                    logger.warning(f"⚠️ {self.log_prefix} (мониторинг): Критически высокий клапан {op:.1f}%")
+                
                 logger.info(f"👁️ {self.log_prefix} (мониторинг): SP={sp:.3f}м, PV={pv:.3f}м, OP={op:.1f}%")
+            else:
+                logger.warning(f"⚠️ {self.log_prefix} (мониторинг): Не удалось получить все значения - SP={sp}, PV={pv}, OP={op}")
         except Exception as e:
-            logger.error(f"Ошибка мониторинга: {e}")
+            logger.error(f"❌ {self.log_prefix}: Ошибка мониторинга: {e}")
 
     async def run(self):
         """Запуск контроллера"""

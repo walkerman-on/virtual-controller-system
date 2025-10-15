@@ -109,7 +109,7 @@
 		"logging_level": "INFO",
 		"controller_heartbeat_timeout": 5.0,
 		"controller_failover_delay": 2.0,
-		"watchdog_update_interval": 5.0
+		"watchdog_update_interval": 1.0
 	},
 	"connection_settings": {
 		"opcua_server": {
