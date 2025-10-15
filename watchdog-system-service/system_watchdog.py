@@ -28,8 +28,7 @@ def get_moscow_time():
 # Импорт Telegram уведомлений
 TELEGRAM_AVAILABLE = False
 try:
-    sys.path.append('/app/telegram')
-    from telegram_bot import TelegramNotifier
+    from telegram_notifier import SimpleTelegramNotifier
     TELEGRAM_AVAILABLE = True
 except ImportError:
     logger.warning("⚠️ Telegram модуль недоступен")
@@ -41,7 +40,7 @@ class SystemWatchdogService:
         self.docker_client = None
         self.telegram_notifier = None
         
-        # Список контейнеров для мониторинга
+        # Список контейнеров для мониторинга (8 из 9, исключая watchdog-system-service)
         self.monitored_containers = [
             'digital-twin-db',
             'opcua-server', 
@@ -50,8 +49,7 @@ class SystemWatchdogService:
             'pid-controller-backup',
             'analytics-service',
             'telegram-notification-bot',
-            'controller-watchdog-service',
-            'watchdog-system-service'
+            'controller-watchdog-service'
         ]
         
         # Состояние контейнеров
@@ -94,7 +92,7 @@ class SystemWatchdogService:
                 logger.warning("⚠️ TELEGRAM_BOT_TOKEN не установлен")
                 return
             
-            self.telegram_notifier = TelegramNotifier(bot_token)
+            self.telegram_notifier = SimpleTelegramNotifier(bot_token)
             
             # Загружаем подписчиков
             try:
@@ -116,13 +114,33 @@ class SystemWatchdogService:
     def send_notification(self, level: str, message: str, additional_data: Dict = None):
         """Отправка уведомления"""
         if not self.telegram_notifier:
+            logger.warning("⚠️ Telegram notifier не инициализирован")
             return
         
         try:
             import asyncio
-            asyncio.run(self.telegram_notifier.send_notification(
-                level, "system_watchdog", message, additional_data
-            ))
+            import threading
+            
+            def send_async():
+                try:
+                    # Создаем новый event loop в отдельном потоке
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(self.telegram_notifier.send_notification(
+                        level, "system_watchdog", message, additional_data
+                    ))
+                    loop.close()
+                except Exception as e:
+                    logger.error(f"❌ Ошибка в async отправке уведомления: {e}")
+            
+            # Запускаем в отдельном потоке
+            thread = threading.Thread(target=send_async)
+            thread.daemon = True
+            thread.start()
+            thread.join(timeout=5)  # Ждем максимум 5 секунд
+            
+            logger.info(f"📤 Уведомление отправлено: {level} - {message[:50]}...")
+            
         except Exception as e:
             logger.error(f"❌ Ошибка отправки уведомления: {e}")
     
@@ -306,9 +324,24 @@ class SystemWatchdogService:
                             }
                         )
                         self.container_states[container_name]['alerts_sent'].add('unhealthy')
+                
+                # Дополнительная проверка для контроллеров - если они перезапускаются
+                elif container_info['status'] == 'running' and container_info['health'] == 'starting' and 'controller' in container_name:
+                    if 'restarting' not in self.container_states[container_name]['alerts_sent']:
+                        self.send_notification(
+                            "WARNING",
+                            f"🔄 Контейнер {container_name} перезапускается",
+                            {
+                                "Container": container_name,
+                                "Status": container_info['status'],
+                                "Health": container_info['health'],
+                                "Action": "Автоматический перезапуск"
+                            }
+                        )
+                        self.container_states[container_name]['alerts_sent'].add('restarting')
         
         # Общая статистика
-        logger.info(f"📊 Состояние системы: {healthy_count}/{total_count} контейнеров работают")
+        logger.info(f"📊 Состояние системы: {healthy_count}/{total_count} контейнеров работают (из 9, исключая watchdog-system-service)")
         
         # Проверяем изменения в общем состоянии системы
         if self.previous_healthy_count != healthy_count:

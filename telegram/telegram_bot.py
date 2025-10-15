@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Set
 from datetime import datetime, timezone, timedelta
 
 import aiohttp
-from telegram import Bot, Update
+from telegram import Bot, Update, BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.error import TelegramError
 
@@ -141,21 +141,7 @@ class TelegramNotifier:
         if self._is_rate_limited(chat_id, level):
             return False
         
-        # Проверка фильтров пользователя
-        if chat_id in self.notification_filters:
-            filters = self.notification_filters[chat_id]
-            
-            # Проверка уровня важности
-            min_level = filters.get('min_level', 'DEBUG')
-            level_priority = {'DEBUG': 0, 'INFO': 1, 'WARNING': 2, 'ERROR': 3, 'CRITICAL': 4}
-            if level_priority.get(level, 0) < level_priority.get(min_level, 0):
-                return False
-            
-            # Проверка компонентов
-            allowed_components = filters.get('components', [])
-            if allowed_components and component not in allowed_components:
-                return False
-        
+        # Отправляем все уведомления (критические и предупреждения)
         return True
     
     async def send_notification(self, level: str, component: str, message: str, 
@@ -534,43 +520,25 @@ class TelegramBotHandler:
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /help"""
         text = """
-📖 *Помощь по командам*
+📖 *Доступные команды по клику в меню*
 
 *Основные команды:*
-/start - Начать работу с ботом
-/subscribe - Подписаться на уведомления
-/unsubscribe - Отписаться от уведомлений
+/start - Начать работу с ботом и подписаться на уведомления
 /status - Получить отчет о состоянии системы
 
 *Мониторинг параметров:*
-/params - Все параметры системы
-/tank - Состояние резервуара
-/valve - Состояние клапана
-/pid - Параметры PID контроллера
-/opcua - Статус OPC UA сервера
-/database - Статус базы данных
-/analytics - Статус аналитики
-/controllers - Статус контроллеров
+/tank - Состояние резервуара (уровень, объем, давление)
+/valve - Состояние клапана (открытие, потоки)
+/pid - Параметры PID контроллера (Kp, Ki, Kd, уставка)
+/controllers - Статус контроллеров (основной/резервный)
 /system - Общее состояние системы
-/alerts - Активные предупреждения
-/history - История событий
-/logs - Последние логи
 
-*Настройка фильтров:*
-/filters - Информация о фильтрах
-/filter_level LEVEL - Установить минимальный уровень уведомлений
-/filter_components COMPONENTS - Установить отслеживаемые компоненты
-
-*Примеры:*
-/filter_level ERROR
-/filter_components tank,valve,controller
-
-*Уровни важности:*
-DEBUG - Отладочная информация
-INFO - Информационные сообщения
-WARNING - Предупреждения
-ERROR - Ошибки
-CRITICAL - Критические ошибки
+*Уведомления:*
+Все уведомления отправляются автоматически:
+• Критические ошибки системы
+• Предупреждения о проблемах
+• Изменения статуса контроллеров
+• Отключения контейнеров
         """
         
         await update.message.reply_text(text, parse_mode='Markdown')
@@ -1518,6 +1486,25 @@ CRITICAL - Критические ошибки
             logger.error(f"Ошибка получения логов: {e}")
             return {'logs': [], 'last_hour': 0, 'last_day': 0}
     
+    async def setup_menu_commands(self):
+        """Установка команд меню"""
+        commands = [
+            BotCommand('start', 'Начать работу с ботом'),
+            BotCommand('status', 'ℹ️ Статус системы'),
+            BotCommand('tank', '🛢️ Состояние резервуара'),
+            BotCommand('valve', '🕹️ Состояние клапана'),
+            BotCommand('pid', '🛠️ Параметры PID'),
+            BotCommand('controllers', '❕ Статус контроллеров'),
+            BotCommand('system', '💬 Общее состояние'),
+            BotCommand('help', '🆘 Помощь по командам')
+        ]
+        
+        try:
+            await self.application.bot.set_my_commands(commands)
+            logger.info('✅ Команды меню установлены')
+        except Exception as e:
+            logger.error(f'❌ Ошибка установки команд меню: {e}')
+
     def setup_handlers(self, application: Application):
         """Настройка обработчиков команд"""
         self.application = application
@@ -1544,10 +1531,7 @@ CRITICAL - Критические ошибки
         application.add_handler(CommandHandler("history", self.history_command))
         application.add_handler(CommandHandler("logs", self.logs_command))
         
-        # Команды фильтров
-        application.add_handler(CommandHandler("filters", self.filters_command))
-        application.add_handler(CommandHandler("filter_level", self.filter_level_command))
-        application.add_handler(CommandHandler("filter_components", self.filter_components_command))
+        # Команды фильтров удалены - отправляем все уведомления
 
 
 # Глобальный экземпляр уведомлений
@@ -1589,6 +1573,12 @@ def start_telegram_bot_sync(bot_token: str, admin_chat_id: Optional[str] = None)
     application = Application.builder().token(bot_token).build()
     bot_handler.setup_handlers(application)
     
+    # Установка команд меню
+    try:
+        loop.run_until_complete(bot_handler.setup_menu_commands())
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось установить команды меню: {e}")
+    
     # Запуск бота
     logger.info("🚀 Запуск Telegram бота...")
     try:
@@ -1618,6 +1608,12 @@ async def start_telegram_bot(bot_token: str, admin_chat_id: Optional[str] = None
     # Создание приложения
     application = Application.builder().token(bot_token).build()
     bot_handler.setup_handlers(application)
+    
+    # Установка команд меню
+    try:
+        loop.run_until_complete(bot_handler.setup_menu_commands())
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось установить команды меню: {e}")
     
     # Запуск бота
     logger.info("🚀 Запуск Telegram бота...")

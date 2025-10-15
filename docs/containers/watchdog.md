@@ -1,85 +1,47 @@
-# 🐕 Watchdog
+# Watchdog сервисы
 
 ## Описание
-Сервис мониторинга системы виртуального контроллера, отслеживающий состояние всех компонентов.
+Сервисы мониторинга и автоматического перезапуска компонентов системы.
+
+## Контейнеры
+- **Controller Watchdog**: controller-watchdog-service
+- **System Watchdog**: watchdog-system-service
+
+## Controller Watchdog
+Мониторит контроллеры и перезапускает их при необходимости.
+
+### Переменные окружения
+- `OPCUA_SERVER_URL` - URL OPC UA сервера
+- `TELEGRAM_BOT_TOKEN` - токен Telegram бота
+
+### Volumes
+- `./config.json` - конфигурация системы
+- `./telegram` - модули Telegram
+- `telegram_data` - данные Telegram
+- `/var/run/docker.sock` - Docker socket (только чтение)
+
+## System Watchdog
+Мониторит все контейнеры системы и отправляет уведомления.
+
+### Переменные окружения
+- `TELEGRAM_BOT_TOKEN` - токен Telegram бота
+
+### Volumes
+- `./telegram` - модули Telegram
+- `telegram_data` - данные Telegram
+- `/var/run/docker.sock` - Docker socket (только чтение)
 
 ## Функции
-- Мониторинг состояния всех сервисов
-- Проверка доступности компонентов
-- Автоматическое обнаружение сбоев
-- Интеграция с системой уведомлений
-- Логирование событий мониторинга
-
-## Конфигурация
-- **Интервал проверки**: 5 секунд
-- **Таймаут**: 30 секунд
-- **Интервал обновления**: 5.0 секунд
-- **База данных**: PostgreSQL
-
-## Переменные окружения
-```bash
-WATCHDOG_INTERVAL=5
-WATCHDOG_TIMEOUT=30
-WATCHDOG_UPDATE_INTERVAL=5.0
-OPCUA_SERVER_URL=opc.tcp://opcua-server:4840/freeopcua/server/
-DB_HOST=database
-DB_PORT=5432
-DB_NAME=digital_twin_db
-DB_USER=process_user
-DB_PASSWORD=process_password
-```
-
-## Мониторируемые компоненты
-- **Database** - База данных PostgreSQL
-- **OPC UA Server** - OPC UA сервер
-- **Process Model** - Модель процесса
-- **Controller Primary** - Основной контроллер
-- **Controller Backup** - Резервный контроллер
-- **Analytics** - Сервис аналитики
-- **Telegram Bot** - Telegram бот
-
-## Запуск
-```bash
-docker-compose up -d watchdog
-```
-
-## Проверка состояния
-```bash
-# Статус контейнера
-docker-compose ps watchdog
-
-# Логи watchdog
-docker-compose logs watchdog
-
-# Проверка мониторинга
-docker-compose logs watchdog | grep -E "(ERROR|WARNING|CRITICAL)"
-```
-
-## Логика мониторинга
-1. **Проверка подключения** к каждому компоненту
-2. **Анализ состояния** сервисов
-3. **Обнаружение сбоев** и недоступности
-4. **Логирование событий** в базу данных
-5. **Отправка уведомлений** при критических ситуациях
-
-## Типы проверок
-- **Health Check** - Проверка доступности сервиса
-- **Response Time** - Измерение времени отклика
-- **Data Validation** - Проверка корректности данных
-- **Connection Test** - Тест подключения к сервису
-
-## Мониторинг
+- Мониторинг состояния контроллеров
 - Автоматический перезапуск при сбоях
-- Логирование всех операций мониторинга
-- Интеграция с Telegram ботом
+- Отправка уведомлений в Telegram
+- Мониторинг всех контейнеров системы
+
+## Права доступа
+Запускаются от root для доступа к Docker socket.
 
 ## Логи
 ```bash
-docker-compose logs -f watchdog
+docker-compose logs controller-watchdog-service
+docker-compose logs watchdog-system-service
 ```
-
-## Интеграция
-- Мониторит все компоненты системы
-- Сохраняет данные в базу данных
-- Отправляет уведомления через Telegram
-- Работает независимо от других сервисов

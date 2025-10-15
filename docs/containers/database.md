@@ -1,83 +1,37 @@
-# 🗄️ Database (PostgreSQL)
+# База данных PostgreSQL
 
 ## Описание
-База данных PostgreSQL для хранения данных системы виртуального контроллера.
+PostgreSQL база данных для хранения данных процесса, PID параметров и логов.
 
-## Функции
-- Хранение данных процесса
-- Логирование событий
-- Сохранение состояния PID регулятора
-- История failover событий
-- Метрики производительности
-
-## Конфигурация
+## Контейнер
+- **Имя**: digital-twin-db
+- **Образ**: postgres:15-alpine
 - **Порт**: 5432
-- **База данных**: digital_twin_db
-- **Пользователь**: process_user
-- **Пароль**: process_password
-- **Админ**: postgres
 
 ## Переменные окружения
+- `POSTGRES_DB` - имя базы данных (из DB_NAME)
+- `POSTGRES_USER` - пользователь (из DB_USER)
+- `POSTGRES_PASSWORD` - пароль (из DB_PASSWORD)
+
+## Volumes
+- `postgres_data` - данные PostgreSQL
+- `./database/init` - скрипты инициализации
+
+## Health Check
 ```bash
-DB_HOST=database
-DB_PORT=5432
-DB_NAME=digital_twin_db
-DB_USER=process_user
-DB_PASSWORD=process_password
-DB_ADMIN_USER=postgres
-DB_ADMIN_PASSWORD=postgres_password
-DB_CONNECTION_TIMEOUT=30.0
-DB_POOL_MIN_SIZE=2
-DB_POOL_MAX_SIZE=10
+pg_isready -U ${DB_USER} -d ${DB_NAME}
 ```
 
-## Схема базы данных
-- **process_data** - Данные процесса
-- **controller_logs** - Логи контроллеров
-- **failover_events** - События переключения
-- **system_metrics** - Метрики системы
-
-## Запуск
+## Подключение
 ```bash
-docker-compose up -d database
-```
+# Из контейнера
+psql -h digital-twin-db -U postgres -d digital_twin_db
 
-## Проверка состояния
-```bash
-# Статус контейнера
-docker-compose ps database
-
-# Подключение к базе
-docker-compose exec database psql -U process_user -d digital_twin_db
-
-# Проверка подключения
-docker-compose exec database pg_isready -U process_user
-```
-
-## Резервное копирование
-```bash
-# Создание бэкапа
-docker-compose exec database pg_dump -U process_user digital_twin_db > backup.sql
-
-# Восстановление
-docker-compose exec -T database psql -U process_user digital_twin_db < backup.sql
-```
-
-## Мониторинг
-- Health check каждые 30 секунд
-- Автоматический перезапуск при сбоях
-- Логирование подключений
-
-## Подключение извне
-```bash
-# Из хоста
-psql -h localhost -p 5432 -U process_user -d digital_twin_db
-
-# Из другого контейнера
-psql -h database -p 5432 -U process_user -d digital_twin_db
+# С хоста
+psql -h localhost -p 5432 -U postgres -d digital_twin_db
 ```
 
 ## Логи
 ```bash
-docker-compose logs -f database
+docker-compose logs database
 ```

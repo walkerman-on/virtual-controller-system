@@ -3,3 +3,4 @@ cryptography>=3.4.8
 numpy==1.24.3
 asyncpg==0.28.0
 psycopg2-binary==2.9.7
+python-dotenv==1.0.0
