@@ -14,8 +14,9 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional
 
 from opcua import Client
-from process_model import ProcessModel
 from database_manager import get_db_manager, DatabaseLogger
+from shared.app_config import load_app_config
+from simulation_runtime import ModelSimulationRuntime
 
 # Импорт Telegram уведомлений
 TELEGRAM_AVAILABLE = False
@@ -24,7 +25,7 @@ try:
     from telegram_bot import TelegramNotifier
     TELEGRAM_AVAILABLE = True
 except ImportError:
-    logger.warning("⚠️ Telegram модуль недоступен")
+    logging.warning("⚠️ Telegram модуль недоступен")
 
 # Настройка логирования
 logging.basicConfig(
@@ -50,9 +51,10 @@ class ProcessModelClient:
             config_path: Путь к файлу конфигурации
         """
         self.config_path = config_path
-        self.config = self._load_config()
+        self.config = load_app_config(config_path)
         self.client = None
         self.model = None
+        self._runtime: ModelSimulationRuntime | None = None
         self.running = False
         
         # Параметры подключения
@@ -83,20 +85,6 @@ class ProcessModelClient:
         self.node_ids = {}
         self._setup_node_ids()
         
-    def _load_config(self) -> Dict[str, Any]:
-        """Загрузка конфигурации из JSON файла"""
-        try:
-            with open(self.config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-            logger.info(f"📋 Конфигурация модели загружена из {self.config_path}")
-            return config
-        except FileNotFoundError:
-            logger.error(f"❌ Файл конфигурации {self.config_path} не найден")
-            raise
-        except json.JSONDecodeError as e:
-            logger.error(f"❌ Ошибка парсинга JSON: {e}")
-            raise
-    
     def _setup_node_ids(self):
         """Настройка Node IDs для переменных OPC UA"""
         pv_config = self.config['opcua_variables']['process_variables']
@@ -105,7 +93,23 @@ class ProcessModelClient:
             self.node_ids[var_name] = var_config['node_id']
             
         logger.info("🔗 Node IDs настроены")
-    
+
+    def _plant_bindings(self) -> Dict[str, Any]:
+        return self.config["model_plant"]["bindings"]
+
+    def _tank_height(self) -> float:
+        return float(self.config["model_parameters"].get("tank_height", 3.0))
+
+    def _sp_tag_for_db(self) -> str:
+        loops = self.config.get("controller_loops") or []
+        if loops and isinstance(loops[0], dict):
+            b = loops[0].get("bindings") or {}
+            return str(b.get("sp", "SP_level"))
+        return "SP_level"
+
+    def _model_alerts(self) -> Dict[str, Any]:
+        return self.config["model_alerts"]
+
     def init_telegram_notifications(self):
         """Инициализация Telegram уведомлений"""
         if not TELEGRAM_AVAILABLE:
@@ -149,125 +153,128 @@ class ProcessModelClient:
         except Exception as e:
             logger.error(f"❌ Ошибка отправки уведомления: {e}")
     
-    def check_critical_conditions(self, tank_level: float, valve_position: float, 
+    def check_critical_conditions(self, tank_level: float, valve_position: float,
                                  inlet_flow: float, outlet_flow: float):
-        """Проверка критических условий и отправка уведомлений"""
+        """Проверка критических условий и отправка уведомлений (пороги из ``model_alerts``)."""
         try:
-            # КРИТИЧЕСКИЕ УСЛОВИЯ (CRITICAL)
-            
-            # 1. Переполнение резервуара (критическое)
-            if tank_level > 2.8:  # 93% от высоты 3м
-                if not self.notification_sent['tank_overflow']:
+            a = self._model_alerts()
+            lv = a["levels"]
+            vv = a["valve"]
+            tx = a["texts"]
+            th = self._tank_height()
+            t_now = get_moscow_time().strftime("%H:%M:%S")
+
+            if tank_level > lv["critical_high_m"]:
+                if not self.notification_sent["tank_overflow"]:
+                    to = tx["tank_overflow"]
                     self.send_notification(
                         "CRITICAL",
-                        "🚨 КРИТИЧЕСКОЕ ПЕРЕПОЛНЕНИЕ РЕЗЕРВУАРА!",
+                        to["title"],
                         {
                             "Tank Level": f"{tank_level:.2f} м",
-                            "Max Height": "3.0 м",
+                            "Max Height": f"{th:.1f} м",
                             "Valve Position": f"{valve_position:.1f}%",
                             "Outlet Flow": f"{outlet_flow:.1f} м³/ч",
                             "Inlet Flow": f"{inlet_flow:.1f} м³/ч",
-                            "Action Required": "Немедленно увеличить расход через клапан!",
-                            "Time": get_moscow_time().strftime('%H:%M:%S')
-                        }
+                            "Action Required": to["action"],
+                            "Time": t_now,
+                        },
                     )
-                    self.notification_sent['tank_overflow'] = True
-                    logger.critical("🚨 КРИТИЧЕСКОЕ ПЕРЕПОЛНЕНИЕ РЕЗЕРВУАРА!")
-            
-            # 2. Полное опорожнение резервуара (критическое)
-            elif tank_level < 0.1:  # 3% от высоты
-                if not self.notification_sent['tank_empty']:
+                    self.notification_sent["tank_overflow"] = True
+                    logger.critical(to["title"])
+
+            elif tank_level < lv["critical_low_m"]:
+                if not self.notification_sent["tank_empty"]:
+                    te = tx["tank_empty"]
                     self.send_notification(
                         "CRITICAL",
-                        "🚨 КРИТИЧЕСКОЕ ОПОРОЖНЕНИЕ РЕЗЕРВУАРА!",
+                        te["title"],
                         {
                             "Tank Level": f"{tank_level:.2f} м",
-                            "Min Safe Level": "0.3 м",
+                            "Min Safe Level": f"{lv['min_safe_level_hint_m']:.1f} м",
                             "Valve Position": f"{valve_position:.1f}%",
                             "Outlet Flow": f"{outlet_flow:.1f} м³/ч",
                             "Inlet Flow": f"{inlet_flow:.1f} м³/ч",
-                            "Action Required": "Немедленно уменьшить расход через клапан!",
-                            "Time": get_moscow_time().strftime('%H:%M:%S')
-                        }
+                            "Action Required": te["action"],
+                            "Time": t_now,
+                        },
                     )
-                    self.notification_sent['tank_empty'] = True
-                    logger.critical("🚨 КРИТИЧЕСКОЕ ОПОРОЖНЕНИЕ РЕЗЕРВУАРА!")
-            
-            # 3. Клапан застрял в критическом положении
-            elif valve_position > 95:  # Клапан почти полностью открыт
-                if not self.notification_sent['valve_stuck']:
+                    self.notification_sent["tank_empty"] = True
+                    logger.critical(te["title"])
+
+            elif valve_position > vv["stuck_open_above_pct"]:
+                if not self.notification_sent["valve_stuck"]:
+                    vo = tx["valve_stuck_open"]
                     self.send_notification(
                         "CRITICAL",
-                        "🚨 КЛАПАН ЗАСТРЯЛ В ОТКРЫТОМ ПОЛОЖЕНИИ!",
+                        vo["title"],
                         {
                             "Valve Position": f"{valve_position:.1f}%",
                             "Tank Level": f"{tank_level:.2f} м",
-                            "Action Required": "Проверить механизм клапана!",
-                            "Time": get_moscow_time().strftime('%H:%M:%S')
-                        }
+                            "Action Required": vo["action"],
+                            "Time": t_now,
+                        },
                     )
-                    self.notification_sent['valve_stuck'] = True
-                    logger.critical("🚨 КЛАПАН ЗАСТРЯЛ В ОТКРЫТОМ ПОЛОЖЕНИИ!")
-            
-            elif valve_position < 5:  # Клапан почти полностью закрыт
-                if not self.notification_sent['valve_stuck']:
+                    self.notification_sent["valve_stuck"] = True
+                    logger.critical(vo["title"])
+
+            elif valve_position < vv["stuck_closed_below_pct"]:
+                if not self.notification_sent["valve_stuck"]:
+                    vc = tx["valve_stuck_closed"]
                     self.send_notification(
                         "CRITICAL",
-                        "🚨 КЛАПАН ЗАСТРЯЛ В ЗАКРЫТОМ ПОЛОЖЕНИИ!",
+                        vc["title"],
                         {
                             "Valve Position": f"{valve_position:.1f}%",
                             "Tank Level": f"{tank_level:.2f} м",
-                            "Action Required": "Проверить механизм клапана!",
-                            "Time": get_moscow_time().strftime('%H:%M:%S')
-                        }
+                            "Action Required": vc["action"],
+                            "Time": t_now,
+                        },
                     )
-                    self.notification_sent['valve_stuck'] = True
-                    logger.critical("🚨 КЛАПАН ЗАСТРЯЛ В ЗАКРЫТОМ ПОЛОЖЕНИИ!")
-            
-            # ПРЕДУПРЕЖДАЮЩИЕ УСЛОВИЯ (WARNING)
-            
-            # 1. Высокий уровень (предупреждение)
-            elif 2.4 < tank_level <= 2.8:  # 80-93% заполнения
-                if not self.notification_sent['tank_high']:
+                    self.notification_sent["valve_stuck"] = True
+                    logger.critical(vc["title"])
+
+            elif lv["warn_high_band_low_m"] < tank_level <= lv["warn_high_band_high_m"]:
+                if not self.notification_sent["tank_high"]:
+                    thi = tx["tank_high"]
                     self.send_notification(
                         "WARNING",
-                        "⚠️ ВЫСОКИЙ УРОВЕНЬ В РЕЗЕРВУАРЕ",
+                        thi["title"],
                         {
                             "Tank Level": f"{tank_level:.2f} м",
                             "Valve Position": f"{valve_position:.1f}%",
-                            "Warning Threshold": "80% (2.4м)",
-                            "Critical Threshold": "93% (2.8м)",
-                            "Time": get_moscow_time().strftime('%H:%M:%S')
-                        }
+                            "Warning Threshold": thi["warning_threshold_label"],
+                            "Critical Threshold": thi["critical_threshold_label"],
+                            "Time": t_now,
+                        },
                     )
-                    self.notification_sent['tank_high'] = True
-                    logger.warning("⚠️ ВЫСОКИЙ УРОВЕНЬ В РЕЗЕРВУАРЕ")
-            
-            # 2. Низкий уровень (предупреждение)
-            elif 0.1 <= tank_level < 0.3:  # 3-10% заполнения
-                if not self.notification_sent['tank_low']:
+                    self.notification_sent["tank_high"] = True
+                    logger.warning(thi["title"])
+
+            elif lv["warn_low_band_low_m"] <= tank_level < lv["warn_low_band_high_m"]:
+                if not self.notification_sent["tank_low"]:
+                    tlo = tx["tank_low"]
                     self.send_notification(
                         "WARNING",
-                        "⚠️ НИЗКИЙ УРОВЕНЬ В РЕЗЕРВУАРЕ",
+                        tlo["title"],
                         {
                             "Tank Level": f"{tank_level:.2f} м",
                             "Valve Position": f"{valve_position:.1f}%",
-                            "Warning Threshold": "10% (0.3м)",
-                            "Critical Threshold": "3% (0.1м)",
-                            "Time": get_moscow_time().strftime('%H:%M:%S')
-                        }
+                            "Warning Threshold": tlo["warning_threshold_label"],
+                            "Critical Threshold": tlo["critical_threshold_label"],
+                            "Time": t_now,
+                        },
                     )
-                    self.notification_sent['tank_low'] = True
-                    logger.warning("⚠️ НИЗКИЙ УРОВЕНЬ В РЕЗЕРВУАРЕ")
-            
-            # Сброс предупреждений при нормализации состояния
-            if 0.3 <= tank_level <= 2.4:  # Нормальный диапазон
-                self.notification_sent['tank_high'] = False
-                self.notification_sent['tank_low'] = False
-            
-            if 10 <= valve_position <= 90:  # Клапан в нормальном диапазоне
-                self.notification_sent['valve_stuck'] = False
-                
+                    self.notification_sent["tank_low"] = True
+                    logger.warning(tlo["title"])
+
+            if lv["normal_min_m"] <= tank_level <= lv["normal_max_m"]:
+                self.notification_sent["tank_high"] = False
+                self.notification_sent["tank_low"] = False
+
+            if vv["normal_min_pct"] <= valve_position <= vv["normal_max_pct"]:
+                self.notification_sent["valve_stuck"] = False
+
         except Exception as e:
             logger.error(f"❌ Ошибка проверки критических условий: {e}")
     
@@ -326,27 +333,26 @@ class ProcessModelClient:
     def _initialize_model(self):
         """Инициализация модели процесса"""
         try:
-            # Создание модели с параметрами из конфигурации
-            model_params = self.config['model_parameters']
-            self.model = ProcessModel(model_params)
-            
-            # Получение начальных значений с сервера
-            initial_opening = self._get_variable_value('OP_valve')
+            model_params = self.config["model_parameters"]
+            self._runtime = ModelSimulationRuntime(self.config)
+            self.model = self._runtime.plant
+            b_in = self._plant_bindings()["in"]
+            b_out = self._plant_bindings()["out"]
+
+            initial_opening = self._get_variable_value(b_in["valve_opening"])
             if initial_opening is None:
-                initial_opening = model_params.get('initial_valve_opening', 50.0)
-                self._set_variable_value('OP_valve', initial_opening)
-            
-            # Установка начального уровня жидкости
-            initial_level = model_params.get('initial_liquid_level', 1.5)
-            self._set_variable_value('PV_level', initial_level)
-            
-            # Установка начального расхода
-            initial_flow = model_params.get('constant_inlet_flow', 100.0)
-            self._set_variable_value('inlet_flow', initial_flow)
-            
+                initial_opening = model_params.get("initial_valve_opening", 50.0)
+                self._set_variable_value(b_in["valve_opening"], initial_opening)
+
+            initial_level = model_params.get("initial_liquid_level", 1.5)
+            self._set_variable_value(b_out["liquid_level"], initial_level)
+
+            initial_flow = model_params.get("constant_inlet_flow", 100.0)
+            self._set_variable_value(b_in["inlet_flow"], initial_flow)
+
             logger.info("🏭 Модель процесса инициализирована")
             return True
-            
+
         except Exception as e:
             logger.error(f"❌ Ошибка инициализации модели: {e}")
             return False
@@ -354,58 +360,48 @@ class ProcessModelClient:
     def _run_simulation_step(self):
         """Выполнение одного шага симуляции"""
         try:
-            # Получение текущего управляющего воздействия с сервера
-            valve_opening = self._get_variable_value('OP_valve')
+            if not self._runtime:
+                logger.error("❌ Рантайм модели не инициализирован")
+                return
+
+            b_in = self._plant_bindings()["in"]
+            valve_tag = b_in["valve_opening"]
+            valve_opening = self._get_variable_value(valve_tag)
             if valve_opening is None:
-                logger.warning("⚠️ Не удалось получить значение OP_valve, используем предыдущее")
+                logger.warning("⚠️ Не удалось получить значение %s, используем предыдущее", valve_tag)
                 valve_opening = 50.0
-            
-            # Проверка корректности полученного значения
+
             if valve_opening < 0 or valve_opening > 100:
                 logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Некорректное значение клапана {valve_opening:.1f}%")
                 valve_opening = max(0.0, min(valve_opening, 100.0))
-            
-            # Расчет модели
-            result = self.model.calculate_step(valve_opening)
-            
-            # Проверка результатов расчета
+
+            result = self._runtime.run_step(self._get_variable_value, self._set_variable_value)
+
             if result is None:
                 logger.critical("🚨 КРИТИЧЕСКАЯ ОШИБКА: Модель вернула None результат!")
                 return
-            
-            # Проверка корректности результатов
-            if result['liquid_level'] < 0:
+
+            tank_h = self._tank_height()
+            if result["liquid_level"] < 0:
                 logger.critical(f"🚨 КРИТИЧЕСКАЯ ОШИБКА: Отрицательный уровень жидкости {result['liquid_level']:.3f}м!")
-            elif result['liquid_level'] > self.config.get('height', 3.0):
-                logger.critical(f"🚨 КРИТИЧЕСКАЯ ОШИБКА: Уровень жидкости превышает высоту бака!")
-            
-            if result['outlet_flow'] < 0:
+            elif result["liquid_level"] > tank_h:
+                logger.critical("🚨 КРИТИЧЕСКАЯ ОШИБКА: Уровень жидкости превышает высоту бака!")
+
+            if result["outlet_flow"] < 0:
                 logger.error(f"❌ ОШИБКА: Отрицательный расход {result['outlet_flow']:.2f} м³/ч")
-            
-            # Отправка результатов на сервер
-            success_pv = self._set_variable_value('PV_level', result['liquid_level'])
-            success_flow = self._set_variable_value('outlet_flow', result['outlet_flow'])
-            
-            if not success_pv:
-                logger.error("❌ ОШИБКА: Не удалось установить PV_level на сервере")
-            if not success_flow:
-                logger.error("❌ ОШИБКА: Не удалось установить outlet_flow на сервере")
-            
-            # Проверка критических условий и отправка уведомлений
-            inlet_flow = self._get_variable_value('inlet_flow') or 100.0
+
+            inlet_flow = self._get_variable_value(b_in["inlet_flow"]) or 100.0
             self.check_critical_conditions(
-                result['liquid_level'], 
-                valve_opening, 
-                inlet_flow, 
-                result['outlet_flow']
+                result["liquid_level"],
+                valve_opening,
+                inlet_flow,
+                result["outlet_flow"],
             )
-            
-            # Сохранение данных в базу данных
+
             if self.db_manager and self.db_manager.sync_connection:
                 try:
-                    # Получаем дополнительные данные с сервера
-                    sp_level = self._get_variable_value('SP_level') or 2.0
-                    tank_pressure = result.get('tank_pressure', 0)
+                    sp_level = self._get_variable_value(self._sp_tag_for_db()) or 2.0
+                    tank_pressure = result.get("tank_pressure", 0)
                     
                     # Проверка корректности данных перед сохранением
                     if sp_level < 0 or sp_level > 5:
@@ -439,20 +435,26 @@ class ProcessModelClient:
             total_pressure = atmospheric_pressure + tank_pressure
             logger.debug(f"🔍 Отладка: гидростатическое_давление={tank_pressure:.1f}Па, "
                        f"полное_давление={total_pressure:.1f}Па, "
-                       f"плотность={self.config.get('liquid_density', 1000.0)}кг/м³")
+                       f"плотность={self.config['model_parameters'].get('liquid_density', 1000.0)}кг/м³")
             
-            # Проверка на критические состояния процесса
-            level_percentage = (result['liquid_level'] / self.config.get('height', 3.0)) * 100
-            if level_percentage > 95:
-                logger.warning(f"⚠️ КРИТИЧЕСКОЕ СОСТОЯНИЕ: Бак заполнен на {level_percentage:.1f}%!")
-            elif level_percentage < 5:
-                logger.warning(f"⚠️ КРИТИЧЕСКОЕ СОСТОЯНИЕ: Бак заполнен на {level_percentage:.1f}%!")
-            
-            # Проверка стабильности процесса
-            inlet_flow = self._get_variable_value('inlet_flow') or 100.0
-            flow_difference = abs(result['outlet_flow'] - inlet_flow)
-            if flow_difference > 50:  # Разница больше 50 м³/ч
-                logger.warning(f"⚠️ НЕСТАБИЛЬНОСТЬ: Разница потоков {flow_difference:.1f} м³/ч")
+            plog = self._model_alerts()["process_log"]
+            level_percentage = (result["liquid_level"] / self._tank_height()) * 100
+            if level_percentage > plog["fill_percent_high"]:
+                logger.warning(
+                    f"⚠️ КРИТИЧЕСКОЕ СОСТОЯНИЕ: Бак заполнен на {level_percentage:.1f}%!"
+                )
+            elif level_percentage < plog["fill_percent_low"]:
+                logger.warning(
+                    f"⚠️ КРИТИЧЕСКОЕ СОСТОЯНИЕ: Бак заполнен на {level_percentage:.1f}%!"
+                )
+
+            inlet_flow = self._get_variable_value(self._plant_bindings()["in"]["inlet_flow"]) or 100.0
+            flow_difference = abs(result["outlet_flow"] - inlet_flow)
+            diff_lim = plog["inlet_outlet_diff_warn_m3h"]
+            if flow_difference > diff_lim:
+                logger.warning(
+                    f"⚠️ НЕСТАБИЛЬНОСТЬ: Разница потоков {flow_difference:.1f} м³/ч (порог {diff_lim:.1f})"
+                )
             
         except Exception as e:
             logger.error(f"❌ Критическая ошибка выполнения шага симуляции: {e}")

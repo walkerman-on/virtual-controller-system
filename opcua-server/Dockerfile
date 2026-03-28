@@ -6,24 +6,20 @@ RUN apt-get update && apt-get install -y \
 	g++ \
 	&& rm -rf /var/lib/apt/lists/*
 
-# Создание рабочей директории
 WORKDIR /app
 
-# Копирование файлов требований
-COPY requirements.txt .
+ENV PIP_DEFAULT_TIMEOUT=120
+COPY opcua-server/requirements.txt .
+RUN pip install --no-cache-dir --retries 10 --timeout 120 -r requirements.txt
 
-# Установка Python зависимостей
-RUN pip install --no-cache-dir -r requirements.txt
+COPY shared /app/shared
+COPY opcua-server/server.py /app/
 
-# Копирование исходного кода
-COPY . .
+ENV PYTHONPATH=/app
 
-# Создание пользователя для безопасности
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 
-# Открытие порта
 EXPOSE 4840
 
-# Команда запуска
 CMD ["python", "server.py"]

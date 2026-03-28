@@ -226,7 +226,7 @@ GRANT SELECT ON ALL TABLES IN SCHEMA configurations TO readonly_user;
 INSERT INTO configurations.system_configs (config_name, config_data, description, is_active, created_by)
 VALUES (
     'initial_config',
-    '{"model_parameters": {"tank_height": 3.0, "tank_diameter": 2.0}, "pid_controller": {"kp": 15.0, "ki": 0.1, "kd": 1.0}}',
+    '{"model_parameters": {"tank_height": 3.0, "tank_diameter": 2.0}, "controller_loops": [{"id": "level", "type": "pid", "params": {"kp": 15.0, "ki": 0.1, "kd": 1.0}}]}',
     'Начальная конфигурация системы',
     true,
     'system'

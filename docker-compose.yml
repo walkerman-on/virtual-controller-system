@@ -23,7 +23,9 @@ services:
       start_period: 30s
 
   opcua-server:
-    build: ./opcua-server
+    build:
+      context: .
+      dockerfile: opcua-server/Dockerfile
     container_name: opcua-server
     depends_on:
       database:
@@ -43,7 +45,9 @@ services:
     restart: unless-stopped
 
   model:
-    build: ./model
+    build:
+      context: .
+      dockerfile: model/Dockerfile
     container_name: process-model
     depends_on:
       database:
@@ -68,7 +72,9 @@ services:
     restart: unless-stopped
 
   controller-primary:
-    build: ./controller
+    build:
+      context: .
+      dockerfile: controller/Dockerfile
     container_name: pid-controller-primary
     depends_on:
       database:
@@ -99,7 +105,9 @@ services:
       start_period: 30s
 
   controller-backup:
-    build: ./controller
+    build:
+      context: .
+      dockerfile: controller/Dockerfile
     container_name: pid-controller-backup
     depends_on:
       database:
@@ -212,6 +220,13 @@ services:
       - ./database/database_manager.py:/app/database_manager.py
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CONNECT_TIMEOUT=${TELEGRAM_CONNECT_TIMEOUT:-30}
+      - TELEGRAM_READ_TIMEOUT=${TELEGRAM_READ_TIMEOUT:-30}
+      - TELEGRAM_WRITE_TIMEOUT=${TELEGRAM_WRITE_TIMEOUT:-30}
+      - TELEGRAM_POOL_TIMEOUT=${TELEGRAM_POOL_TIMEOUT:-10}
+      - TELEGRAM_PROXY_URL=${TELEGRAM_PROXY_URL:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - HTTP_PROXY=${HTTP_PROXY:-}
       - ADMIN_CHAT_ID=${ADMIN_CHAT_ID}
       - DB_HOST=${DB_HOST}
       - DB_PORT=${DB_PORT}

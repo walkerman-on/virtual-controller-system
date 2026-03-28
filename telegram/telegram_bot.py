@@ -29,6 +29,54 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
+def build_telegram_application(bot_token: str) -> Application:
+    """
+    Сборка Application с увеличенными таймаутами (по умолчанию в PTB/httpx — 5 с, часто даёт Timed out).
+
+    Переменные окружения (секунды):
+      TELEGRAM_CONNECT_TIMEOUT, TELEGRAM_READ_TIMEOUT, TELEGRAM_WRITE_TIMEOUT, TELEGRAM_POOL_TIMEOUT
+    Прокси при блокировке api.telegram.org:
+      TELEGRAM_PROXY_URL или HTTPS_PROXY / HTTP_PROXY
+    """
+    connect = float(os.getenv("TELEGRAM_CONNECT_TIMEOUT", "30"))
+    read_t = float(os.getenv("TELEGRAM_READ_TIMEOUT", "30"))
+    write_t = float(os.getenv("TELEGRAM_WRITE_TIMEOUT", "30"))
+    pool_t = float(os.getenv("TELEGRAM_POOL_TIMEOUT", "10"))
+
+    b = (
+        Application.builder()
+        .token(bot_token)
+        .connect_timeout(connect)
+        .read_timeout(read_t)
+        .write_timeout(write_t)
+        .pool_timeout(pool_t)
+        .get_updates_connect_timeout(connect)
+        .get_updates_read_timeout(read_t)
+        .get_updates_write_timeout(write_t)
+        .get_updates_pool_timeout(pool_t)
+    )
+
+    proxy = (
+        os.getenv("TELEGRAM_PROXY_URL")
+        or os.getenv("HTTPS_PROXY")
+        or os.getenv("HTTP_PROXY")
+        or ""
+    ).strip()
+    if proxy:
+        b = b.proxy(proxy).get_updates_proxy(proxy)
+        logger.info("Telegram: запросы через прокси (TELEGRAM_PROXY_URL / HTTPS_PROXY)")
+
+    logger.info(
+        "Telegram HTTP: connect/read/write/pool = %.1f/%.1f/%.1f/%.1f с (getUpdates те же)",
+        connect,
+        read_t,
+        write_t,
+        pool_t,
+    )
+    return b.build()
+
+
 def get_moscow_time():
     """Получение текущего времени по МСК (UTC+3)"""
     moscow_tz = timezone(timedelta(hours=3))
@@ -1570,7 +1618,7 @@ def start_telegram_bot_sync(bot_token: str, admin_chat_id: Optional[str] = None)
         logger.warning(f"⚠️ Не удалось подключиться к базе данных: {e}")
     
     # Создание приложения
-    application = Application.builder().token(bot_token).build()
+    application = build_telegram_application(bot_token)
     bot_handler.setup_handlers(application)
     
     # Установка команд меню
@@ -1585,6 +1633,11 @@ def start_telegram_bot_sync(bot_token: str, admin_chat_id: Optional[str] = None)
         application.run_polling()
     except Exception as e:
         logger.error(f"❌ Ошибка в Telegram боте: {e}")
+        logger.error(
+            "Если это таймаут: проверьте доступ к https://api.telegram.org из сети/Docker; "
+            "при блокировке Telegram задайте TELEGRAM_PROXY_URL или HTTPS_PROXY; "
+            "при медленном канале увеличьте TELEGRAM_CONNECT_TIMEOUT и TELEGRAM_READ_TIMEOUT (сек.)."
+        )
     finally:
         # Отключение от OPC UA при завершении
         try:
@@ -1606,12 +1659,12 @@ async def start_telegram_bot(bot_token: str, admin_chat_id: Optional[str] = None
         logger.warning(f"⚠️ Не удалось подключиться к базе данных: {e}")
     
     # Создание приложения
-    application = Application.builder().token(bot_token).build()
+    application = build_telegram_application(bot_token)
     bot_handler.setup_handlers(application)
     
     # Установка команд меню
     try:
-        loop.run_until_complete(bot_handler.setup_menu_commands())
+        await bot_handler.setup_menu_commands()
     except Exception as e:
         logger.warning(f"⚠️ Не удалось установить команды меню: {e}")
     
@@ -1621,6 +1674,11 @@ async def start_telegram_bot(bot_token: str, admin_chat_id: Optional[str] = None
         await application.run_polling(stop_signals=None)
     except Exception as e:
         logger.error(f"❌ Ошибка в Telegram боте: {e}")
+        logger.error(
+            "Если это таймаут: проверьте доступ к https://api.telegram.org из сети/Docker; "
+            "при блокировке Telegram задайте TELEGRAM_PROXY_URL или HTTPS_PROXY; "
+            "при медленном канале увеличьте TELEGRAM_CONNECT_TIMEOUT и TELEGRAM_READ_TIMEOUT (сек.)."
+        )
     finally:
         # Отключение от OPC UA при завершении
         await bot_handler._disconnect_from_opcua()

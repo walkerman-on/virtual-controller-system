@@ -9,9 +9,10 @@ RUN apt-get update && apt-get install -y \
 # Установка рабочей директории
 WORKDIR /app
 
+ENV PIP_DEFAULT_TIMEOUT=120
 # Копирование requirements.txt и установка зависимостей
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --retries 10 --timeout 120 -r requirements.txt
 
 # Копирование исходного кода
 COPY . .

@@ -1,4 +1,5 @@
 {
+	"schema_version": 2,
 	"model_parameters": {
 		"tank_height": 3.0,
 		"tank_diameter": 2.0,
@@ -10,15 +11,96 @@
 		"simulation_time_step": 0.1,
 		"tank_cross_section_area": 3.141592653589793
 	},
-	"pid_controller": {
-		"kp": 15.0,
-		"ki": 0.1,
-		"kd": 1.0,
-		"setpoint": 1.6,
-		"output_min": 0.0,
-		"output_max": 100.0,
-		"integral_limit": 5.0,
-		"derivative_filter_time": 0.1
+	"model_plant": {
+		"type": "tank_process",
+		"id": "main",
+		"bindings": {
+			"in": {
+				"valve_opening": "OP_valve",
+				"inlet_flow": "inlet_flow"
+			},
+			"out": {
+				"liquid_level": "PV_level",
+				"outlet_flow": "outlet_flow"
+			}
+		}
+	},
+	"controller_loops": [
+		{
+			"id": "level",
+			"type": "pid",
+			"params": {
+				"kp": 15.0,
+				"ki": 0.1,
+				"kd": 1.0,
+				"output_min": 0.0,
+				"output_max": 100.0,
+				"integral_limit": 5.0,
+				"derivative_filter_time": 0.1
+			},
+			"bindings": {
+				"sp": "SP_level",
+				"pv": "PV_level",
+				"mv": "OP_valve",
+				"state": {
+					"integral": "pid_integral",
+					"previous_error": "pid_previous_error",
+					"previous_derivative": "pid_previous_derivative"
+				}
+			}
+		}
+	],
+	"model_alerts": {
+		"levels": {
+			"critical_high_m": 2.8,
+			"critical_low_m": 0.1,
+			"warn_high_band_low_m": 2.4,
+			"warn_high_band_high_m": 2.8,
+			"warn_low_band_low_m": 0.1,
+			"warn_low_band_high_m": 0.3,
+			"normal_min_m": 0.3,
+			"normal_max_m": 2.4,
+			"min_safe_level_hint_m": 0.3
+		},
+		"valve": {
+			"stuck_open_above_pct": 95.0,
+			"stuck_closed_below_pct": 5.0,
+			"normal_min_pct": 10.0,
+			"normal_max_pct": 90.0
+		},
+		"process_log": {
+			"fill_percent_high": 95.0,
+			"fill_percent_low": 5.0,
+			"inlet_outlet_diff_warn_m3h": 50.0
+		},
+		"texts": {
+			"tank_overflow": {
+				"title": "🚨 КРИТИЧЕСКОЕ ПЕРЕПОЛНЕНИЕ РЕЗЕРВУАРА!",
+				"action": "Немедленно увеличить расход через клапан!"
+			},
+			"tank_empty": {
+				"title": "🚨 КРИТИЧЕСКОЕ ОПОРОЖНЕНИЕ РЕЗЕРВУАРА!",
+				"action": "Немедленно уменьшить расход через клапан!"
+			},
+			"valve_stuck_open": {
+				"title": "🚨 КЛАПАН ЗАСТРЯЛ В ОТКРЫТОМ ПОЛОЖЕНИИ!",
+				"action": "Проверить механизм клапана!"
+			},
+			"valve_stuck_closed": {
+				"title": "🚨 КЛАПАН ЗАСТРЯЛ В ЗАКРЫТОМ ПОЛОЖЕНИИ!",
+				"action": "Проверить механизм клапана!"
+			},
+			"tank_high": {
+				"title": "⚠️ ВЫСОКИЙ УРОВЕНЬ В РЕЗЕРВУАРЕ",
+				"warning_threshold_label": "80% (2.4м)",
+				"critical_threshold_label": "93% (2.8м)"
+			},
+			"tank_low": {
+				"title": "⚠️ НИЗКИЙ УРОВЕНЬ В РЕЗЕРВУАРЕ",
+				"warning_threshold_label": "10% (0.3м)",
+				"critical_threshold_label": "3% (0.1м)"
+			}
+		}
 	},
 	"opcua_variables": {
 		"process_variables": {
@@ -106,46 +188,8 @@
 		"opcua_server_port": 4840,
 		"model_update_interval": 0.1,
 		"controller_update_interval": 0.1,
-		"logging_level": "INFO",
 		"controller_heartbeat_timeout": 5.0,
 		"controller_failover_delay": 2.0,
 		"watchdog_update_interval": 1.0
-	},
-	"connection_settings": {
-		"opcua_server": {
-			"host": "opcua-server",
-			"port": 4840,
-			"endpoint": "opc.tcp://opcua-server:4840/freeopcua/server/",
-			"namespace": "ProcessVariables",
-			"timeout": 10.0,
-			"retry_attempts": 3,
-			"retry_delay": 1.0
-		},
-		"database": {
-			"host": "database",
-			"port": 5432,
-			"name": "digital_twin_db",
-			"user": "process_user",
-			"password": "process_password",
-			"admin_user": "postgres",
-			"admin_password": "postgres_password",
-			"connection_timeout": 30.0,
-			"pool_min_size": 2,
-			"pool_max_size": 10
-		},
-		"analytics_api": {
-			"host": "analytics",
-			"port": 8080,
-			"base_url": "http://analytics:8080",
-			"external_url": "http://localhost:8080",
-			"timeout": 30.0,
-			"retry_attempts": 3
-		},
-		"monitoring": {
-			"health_check_interval": 30.0,
-			"log_rotation_size": "10MB",
-			"log_retention_days": 7,
-			"metrics_collection_interval": 60.0
-		}
 	}
 }
