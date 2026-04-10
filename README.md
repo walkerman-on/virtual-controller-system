@@ -79,6 +79,7 @@ docker-compose logs -f telegram-bot
 - [docs/SYSTEM_OVERVIEW.md](docs/SYSTEM_OVERVIEW.md) - Обзор системы
 - [docs/CONFIGURATION_SYSTEM.md](docs/CONFIGURATION_SYSTEM.md) - Система конфигурации
 - [docs/CONTAINERS/](docs/CONTAINERS/) - Документация по контейнерам
+- [docs/LOAD_TEST_GUIDE.md](docs/LOAD_TEST_GUIDE.md) - Экспресс нагрузочное тестирование (10-15 минут)
 
 ## 🏗️ Архитектура
 
@@ -108,6 +109,7 @@ docker-compose logs -f telegram-bot
 - **Логи**: `docker-compose logs [service_name]`
 - **Статус**: `docker-compose ps`
 - **Telegram**: Отправьте `/start` боту для подписки на уведомления
+- **Нагрузочное тестирование**: `./load-test/run_profiles.sh` (генерирует `load-test/results/LOAD_TEST_REPORT.md`)
 
 ## 🛠️ Разработка
 

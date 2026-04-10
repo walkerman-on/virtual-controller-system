@@ -1,0 +1,24 @@
+{
+  "profile": {
+    "controllers": 10,
+    "cycle_ms": 1000,
+    "duration_sec": 180,
+    "write_enabled": false,
+    "server_url": "opc.tcp://opcua-server:4840/freeopcua/server/"
+  },
+  "summary": {
+    "workers": 10,
+    "total_cycles": 1800,
+    "total_errors": 0,
+    "error_rate_pct": 0.0,
+    "missed_deadlines": 0,
+    "missed_deadline_rate_pct": 0.0,
+    "latency_ms": {
+      "avg": 54.92344958277764,
+      "p50": 52.06791649993647,
+      "p95": 103.67167290015685,
+      "p99": 130.58318916989265,
+      "max": 179.20920899996418
+    }
+  }
+}

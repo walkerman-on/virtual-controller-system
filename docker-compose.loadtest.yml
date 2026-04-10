@@ -1,0 +1,20 @@
+services:
+  load-generator:
+    build:
+      context: .
+      dockerfile: load-test/Dockerfile
+    container_name: load-generator
+    environment:
+      - OPCUA_SERVER_URL=${OPCUA_SERVER_ENDPOINT}
+      - CONFIG_PATH=/app/config.json
+      - CONTROLLERS=10
+      - CYCLE_MS=1000
+      - DURATION_SEC=180
+      - WRITE_ENABLED=false
+      - RESULT_FILE=/app/results/latest.json
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./load-test/results:/app/results
+    networks:
+      - process-network
+    restart: "no"
