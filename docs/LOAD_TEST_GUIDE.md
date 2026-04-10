@@ -40,6 +40,8 @@ chmod +x load-test/run_profiles.sh
 ./load-test/run_profiles.sh
 ```
 
+По умолчанию включён **`FULL_PID_CYCLE=true`**: каждый эмулятор выполняет цикл как боевой контроллер (SP/PV → PID из `config.json` → запись клапана). Перед тестами выполняется **`docker compose … build load-generator`**, чтобы образ совпадал с текущим кодом в `load-test/`.
+
 Скрипт прогоняет 3 профиля:
 
 1. `baseline`: `N=10`, `cycle=1000ms`, `3 мин`
@@ -77,6 +79,18 @@ docker compose -f docker-compose.yml -f docker-compose.loadtest.yml run --rm \
 - `CYCLE_MS` — период цикла каждого контроллера в миллисекундах.
 - `DURATION_SEC` — длительность теста.
 - `WRITE_ENABLED` — включить запись `OP_valve` (`true/false`).
+- `FULL_PID_CYCLE` — цикл как у боевого контроллера: чтение SP/PV из `controller_loops`, расчёт PID (как в `universal_controller`), запись MV; при `CONTROLLERS=1` дополнительно пишется состояние PID в OPC. При `N>1` состояние PID у каждого воркера своё в памяти, в OPC пишется только выход клапана (общий тег — нагрузочный стресс).
+
+Пример полного PID-цикла:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.loadtest.yml run --rm \
+  -e CONTROLLERS=10 \
+  -e CYCLE_MS=500 \
+  -e DURATION_SEC=180 \
+  -e FULL_PID_CYCLE=true \
+  load-generator
+```
 
 ## Как читать JSON-результат
 

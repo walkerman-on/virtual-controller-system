@@ -14,7 +14,6 @@ run_test() {
   local controllers="$2"
   local cycle_ms="$3"
   local duration_sec="$4"
-  local write_enabled="$5"
 
   local ts
   ts="$(date +%Y%m%d_%H%M%S)"
@@ -22,7 +21,7 @@ run_test() {
   local log_file="$OUT_DIR/${name}_${ts}.log"
 
   echo "=== ${name} ==="
-  echo "controllers=${controllers} cycle_ms=${cycle_ms} duration_sec=${duration_sec} write_enabled=${write_enabled}"
+  echo "controllers=${controllers} cycle_ms=${cycle_ms} duration_sec=${duration_sec} FULL_PID_CYCLE=true"
   docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" \
     opcua-server digital-twin-db analytics-service pid-controller-primary pid-controller-backup \
     | tee -a "$log_file" || true
@@ -31,7 +30,8 @@ run_test() {
     -e CONTROLLERS="${controllers}" \
     -e CYCLE_MS="${cycle_ms}" \
     -e DURATION_SEC="${duration_sec}" \
-    -e WRITE_ENABLED="${write_enabled}" \
+    -e WRITE_ENABLED="false" \
+    -e FULL_PID_CYCLE="true" \
     -e RESULT_FILE="${report_file}" \
     load-generator | tee -a "$log_file"
 
@@ -43,9 +43,13 @@ run_test() {
 
 echo ">>> Ensure base system is running: docker compose up -d"
 docker compose up -d
-run_test "baseline" 10 1000 180 false
-run_test "workload" 30 500 300 false
-run_test "spike" 50 200 180 false
+
+echo ">>> Build load-generator (подхватывает изменения load-test/)"
+"${COMPOSE_CMD[@]}" build load-generator
+
+run_test "baseline" 10 1000 180
+run_test "workload" 30 500 300
+run_test "spike" 50 200 180
 python3 "$ROOT_DIR/load-test/generate_report.py"
 echo "Reports: $OUT_DIR"
 echo "Readable report: $OUT_DIR/LOAD_TEST_REPORT.md"
